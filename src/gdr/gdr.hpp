@@ -14,7 +14,7 @@ cocos2d::CCPoint dataFromString(std::string dataString);
 
 std::vector<std::string> splitByChar(std::string str, char splitChar);
 
-const std::string geobotVersion = "2.0.0";
+const std::string geobotVersion = "alpha 2";
 constexpr bool geobotDisableBuildExpiryLock = true;
 
 namespace gdr {
@@ -293,17 +293,21 @@ namespace gdr {
 				json p1Json;
 				json p2Json;
 
-				p1Json["x"] = frameFix.p1.pos.x;
-				p1Json["y"] = frameFix.p1.pos.y;
-				p1Json["r"] = frameFix.p1.rotation;
+				if (frameFix.p1.pos.x != 0.f) p1Json["x"] = frameFix.p1.pos.x;
+				if (frameFix.p1.pos.y != 0.f) p1Json["y"] = frameFix.p1.pos.y;
+				if (frameFix.p1.rotation != 0.f) p1Json["r"] = frameFix.p1.rotation;
 
-				p2Json["x"] = frameFix.p2.pos.x;
-				p2Json["y"] = frameFix.p2.pos.y;
-				p2Json["r"] = frameFix.p2.rotation;
+				if (frameFix.p2.pos.x != 0.f) p2Json["x"] = frameFix.p2.pos.x;
+				if (frameFix.p2.pos.y != 0.f) p2Json["y"] = frameFix.p2.pos.y;
+				if (frameFix.p2.rotation != 0.f) p2Json["r"] = frameFix.p2.rotation;
+
+				if (p1Json.empty() && p2Json.empty()) continue;
 
 				frameFixJson["frame"] = frameFix.frame;
 				frameFixJson["p1"] = p1Json;
-				frameFixJson["p2"] = p2Json;
+
+				if (frameFix.p2.pos.y != 0.f)
+					frameFixJson["p2"] = p2Json;
 
 				replayJson["frameFixes"].push_back(frameFixJson);
 			}

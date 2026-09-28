@@ -1,13 +1,80 @@
 #include "utils.hpp"
 
-#include <cstdlib>
+namespace {
+const char* kBlurVertShader = R"(
+attribute vec4 a_position;
+attribute vec2 a_texCoord;
+attribute vec4 a_color;
+varying vec2 v_texCoord;
+varying vec4 v_fragmentColor;
+
+void main() {
+    gl_Position = CC_MVPMatrix * a_position;
+    v_fragmentColor = a_color;
+    v_texCoord = a_texCoord;
+}
+)";
+
+const char* kBlurFragShader = R"(
+#ifdef GL_ES
+precision mediump float;
+#endif
+
+varying vec2 v_texCoord;
+varying vec4 v_fragmentColor;
+uniform sampler2D CC_Texture0;
+
+void main() {
+    vec2 px = vec2(1.0 / 512.0, 1.0 / 512.0);
+    vec4 c = texture2D(CC_Texture0, v_texCoord) * 0.2;
+    c += texture2D(CC_Texture0, v_texCoord + vec2(px.x, 0.0)) * 0.2;
+    c += texture2D(CC_Texture0, v_texCoord - vec2(px.x, 0.0)) * 0.2;
+    c += texture2D(CC_Texture0, v_texCoord + vec2(0.0, px.y)) * 0.2;
+    c += texture2D(CC_Texture0, v_texCoord - vec2(0.0, px.y)) * 0.2;
+    gl_FragColor = c * v_fragmentColor;
+}
+)";
+
+void applyBlurRecursively(cocos2d::CCNode* node, cocos2d::CCGLProgram* shader) {
+    if (!node || !shader) return;
+
+    node->setShaderProgram(shader);
+
+    auto children = node->getChildren();
+    if (!children) return;
+
+    for (unsigned int i = 0; i < children->count(); i++) {
+        auto child = static_cast<cocos2d::CCNode*>(children->objectAtIndex(i));
+        applyBlurRecursively(child, shader);
+    }
+}
+}
 
 std::string Utils::narrow(const wchar_t* str) {
     if (!str) {
         return "";
     }
 
-#ifdef GEODE_IS_WINDOWS
+#ifdef GEODE_IS_ANDROID
+    std::string result;
+    size_t len = wcslen(str);
+    
+    if (len == 0) {
+        return result;
+    }
+    
+    result.reserve(len);
+
+    for (size_t i = 0; i < len; ++i) {
+        if (str[i] > 0x7F) {
+            return "";
+        }
+        result.push_back(static_cast<char>(str[i]));
+    }
+
+    return result;
+
+#else
     int size = WideCharToMultiByte(CP_UTF8, 0, str, -1, nullptr, 0, nullptr, nullptr);
     if (size <= 0) {
         return "";
@@ -23,30 +90,22 @@ std::string Utils::narrow(const wchar_t* str) {
     delete[] buffer;
 
     return result;
-
-#else
-    size_t size = std::wcstombs(nullptr, str, 0);
-    if (size == static_cast<size_t>(-1)) {
-        return "";
-    }
-
-    std::string result(size, '\0');
-    if (size == 0) {
-        return result;
-    }
-
-    std::vector<char> buffer(size + 1, '\0');
-    if (std::wcstombs(buffer.data(), str, buffer.size()) == static_cast<size_t>(-1)) {
-        return "";
-    }
-
-    result.assign(buffer.data(), size);
-    return result;
 #endif
 }
 
 std::wstring Utils::widen(const char* str) {
-#ifdef GEODE_IS_WINDOWS
+#ifdef GEODE_IS_ANDROID
+
+    std::wstring result;
+    result.reserve(strlen(str));
+
+    for (size_t i = 0; i < strlen(str); ++i) {
+        result.push_back(static_cast<wchar_t>(str[i]));
+    }
+
+    return result;
+
+#else
 
     if (str == nullptr) {
         return L"Widen Error";
@@ -69,29 +128,6 @@ std::wstring Utils::widen(const char* str) {
 
     std::wstring result(buffer, size_t(size) - 1);
     delete[] buffer;
-    return result;
-
-#else
-    if (!str) {
-        return L"Widen Error";
-    }
-
-    size_t size = std::mbstowcs(nullptr, str, 0);
-    if (size == static_cast<size_t>(-1)) {
-        return L"Widen Error";
-    }
-
-    std::wstring result(size, L'\0');
-    if (size == 0) {
-        return result;
-    }
-
-    std::vector<wchar_t> buffer(size + 1, L'\0');
-    if (std::mbstowcs(buffer.data(), str, buffer.size()) == static_cast<size_t>(-1)) {
-        return L"Widen Error";
-    }
-
-    result.assign(buffer.data(), size);
     return result;
 
 #endif
@@ -132,8 +168,8 @@ std::time_t Utils::getFileCreationTime(const std::filesystem::path& path) {
 
     return ull.QuadPart / 10000000ULL - 11644473600ULL;
 #endif
-    (void)path;
-    return 0;
+    std::time_t ret;
+    return ret;
 }
 
 std::string Utils::formatTime(std::time_t time) {
@@ -205,6 +241,7 @@ void Utils::setBackgroundColor(cocos2d::extension::CCScale9Sprite* bg) {
 		color = ccc3(255, 255, 255);
 
 	bg->setColor(color);
+    Utils::applyBackgroundBlur(bg);
 }
 
 void Utils::setBackgroundColor(geode::NineSlice* bg) {
@@ -216,4 +253,29 @@ void Utils::setBackgroundColor(geode::NineSlice* bg) {
         color = ccc3(255, 255, 255);
 
     bg->setColor(color);
+    Utils::applyBackgroundBlur(bg);
+}
+
+void Utils::applyBackgroundBlur(cocos2d::CCNode* bg) {
+    if (!bg) return;
+
+    static cocos2d::CCGLProgram* blurShader = nullptr;
+    if (!blurShader) {
+        auto* program = new cocos2d::CCGLProgram();
+        if (!program) return;
+        if (!program->initWithVertexShaderByteArray(kBlurVertShader, kBlurFragShader)) {
+            program->release();
+            return;
+        }
+
+        blurShader = program;
+        blurShader->addAttribute(kCCAttributeNamePosition, cocos2d::kCCVertexAttrib_Position);
+        blurShader->addAttribute(kCCAttributeNameColor, cocos2d::kCCVertexAttrib_Color);
+        blurShader->addAttribute(kCCAttributeNameTexCoord, cocos2d::kCCVertexAttrib_TexCoords);
+        blurShader->link();
+        blurShader->updateUniforms();
+        blurShader->retain();
+    }
+
+    applyBlurRecursively(bg, blurShader);
 }

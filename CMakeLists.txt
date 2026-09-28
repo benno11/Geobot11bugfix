@@ -1,19 +1,12 @@
 cmake_minimum_required(VERSION 3.21)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64")
 set(CMAKE_CXX_VISIBILITY_PRESET hidden)
 
-if (APPLE)
-    if (CMAKE_SYSTEM_NAME STREQUAL "iOS" OR GEODE_TARGET_PLATFORM STREQUAL "iOS")
-        # Let Geode's iOS toolchain keep a single device architecture.
-        set(CMAKE_OSX_ARCHITECTURES "arm64")
-    else()
-        set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64")
-    endif()
-endif()
-
-project(geobot VERSION 2.0.0)
+project(geobot2 VERSION 1.0.0)
 option(geobot_FAST_BUILD "Optimize build settings for faster compile times" ON)
+
 option(geobot_ENABLE_TEST_BUILDS "Enable test targets in this project and dependencies" OFF)
 set(BUILD_TESTING ${geobot_ENABLE_TEST_BUILDS} CACHE BOOL "Build tests" FORCE)
  
@@ -24,14 +17,22 @@ add_library(${PROJECT_NAME} SHARED
     src/keybinds.cpp
     src/utils/utils.cpp
     src/gdr/gdr.cpp
+    src/renderer/renderer.cpp
 
+    src/hacks/other.cpp
     src/hacks/tps_bypass.cpp
-    src/hacks/autosave.cpp
+    src/hacks/frame_stepper.cpp
+    src/hacks/layout_mode.cpp
+    src/hacks/show_trajectory.cpp
+    src/hacks/coin_finder.cpp
     src/hacks/clickbot.cpp
+    src/hacks/autoclicker.cpp
 
     src/ui/macro_editor.cpp
+    src/ui/button_edit_layer.cpp
     src/ui/game_ui.cpp
     src/ui/record_layer.cpp
+    src/ui/render_settings_layer.cpp
     src/ui/load_macro_layer.cpp
     src/ui/clickbot_layer.cpp
     src/ui/button_setting.cpp
@@ -84,28 +85,6 @@ if (MSVC)
         if (NOT _geode_event_content STREQUAL _geode_event_original)
             file(WRITE "${_geode_event_hpp}" "${_geode_event_content}")
             message(STATUS "Applied MSVC compatibility patch to Geode Event.hpp send() noexcept")
-        endif()
-    endif()
-endif()
-
-if (WIN32)
-    # Recent Windows bindings can pull in a Geode SDK cocos header with both
-    # non-virtual and virtual init() declarations. Clang rejects that duplicate
-    # member declaration while building GeodeBindings, so normalize the vendored
-    # header before the SDK targets are added.
-    set(_geode_file_utils_win32_h "$ENV{GEODE_SDK}/loader/include/Geode/cocos/platform/win32/CCFileUtilsWin32.h")
-    if (EXISTS "${_geode_file_utils_win32_h}")
-        file(READ "${_geode_file_utils_win32_h}" _geode_file_utils_win32_content)
-        set(_geode_file_utils_win32_original "${_geode_file_utils_win32_content}")
-        string(REPLACE
-            "    bool init();\n"
-            ""
-            _geode_file_utils_win32_content
-            "${_geode_file_utils_win32_content}"
-        )
-        if (NOT _geode_file_utils_win32_content STREQUAL _geode_file_utils_win32_original)
-            file(WRITE "${_geode_file_utils_win32_h}" "${_geode_file_utils_win32_content}")
-            message(STATUS "Applied Windows compatibility patch to Geode CCFileUtilsWin32.h duplicate init() declaration")
         endif()
     endif()
 endif()

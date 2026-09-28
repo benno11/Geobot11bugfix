@@ -51,7 +51,7 @@ public:
 
     static int save(std::string author, std::string desc, std::string path, bool json = false);
 
-    static void autoSave(GJGameLevel* level, std::int64_t number);
+    static void autoSave(GJGameLevel* level, int number);
 
     static void tryAutosave(GJGameLevel* level, CheckpointObject* cp);
 
@@ -63,10 +63,6 @@ public:
 
     static Macro XDtoGDR(std::filesystem::path path);
 
-    static void preparePlayback();
-
-    static void seekPlayback(int frame);
-
     static void resetVariables();
 
     static void resetState(bool cp = false);
@@ -75,6 +71,7 @@ public:
 
     static void toggleRecording();
 
+    static bool shouldStep();
 
     static bool flipControls();
 
@@ -242,6 +239,7 @@ struct PlayerData {
     double m_maybeReverseAcceleration;
     float m_xVelocityRelated2;
     bool m_isDashing;
+    int m_unk9e8;
     int m_groundObjectMaterial;
     float m_vehicleSize;
     float m_playerSpeed;

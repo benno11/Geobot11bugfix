@@ -1,109 +1,157 @@
 #include "includes.hpp"
 
-#include "ui/game_ui.hpp"
 #include "ui/record_layer.hpp"
 #include "practice_fixes/practice_fixes.hpp"
+#include "hacks/layout_mode.hpp"
 
 #include <Geode/binding/LevelEditorLayer.hpp>
-#include <Geode/modify/AppDelegate.hpp>
-#include <Geode/modify/GameStatsManager.hpp>
-#include <Geode/modify/GJGameLevel.hpp>
 #include <Geode/modify/GJBaseGameLayer.hpp>
 #include <Geode/modify/PauseLayer.hpp>
 #include <Geode/modify/PlayLayer.hpp>
 
 namespace {
+constexpr int kFramePerfectMaxGap = 2;
 constexpr int kRespawnMovementClearFrames = 5;
-
-bool shouldBlockRewards() {
-    auto& g = Global::get();
-    return g.botUsedInLevelSession && g.mod->getSavedValue<bool>("macro_auto_safe_mode");
-}
 
 bool isEditorPlaytestCompat(PlayLayer* pl) {
     if (!pl) return false;
     return LevelEditorLayer::get() != nullptr || pl->m_isTestMode;
 }
 
-#ifdef GEODE_IS_IOS
-void clearRuntimeInputState(GJBaseGameLayer* layer) {
-    if (!layer) return;
+std::string getFramePerfectTypeName(int button, bool down) {
+    if (button == 2)
+        return down ? "Left Press" : "Left Release";
+    if (button == 3)
+        return down ? "Right Press" : "Right Release";
+    return down ? "Click Press" : "Click Release";
+}
 
-    auto clearPlayer = [](PlayerObject* player) {
-        if (!player) return;
-        player->releaseAllButtons();
-        player->m_holdingLeft = false;
-        player->m_holdingRight = false;
-        player->m_holdingButtons[1] = false;
-        player->m_holdingButtons[2] = false;
-        player->m_holdingButtons[3] = false;
+bool isTrackedFramePerfectInput(GJBaseGameLayer* layer, input const& currentInput) {
+    return currentInput.button == 1 ||
+           (layer->m_levelSettings->m_platformerMode &&
+            (currentInput.button == 2 || currentInput.button == 3));
+}
+
+bool isFramePerfectForTier(int leftWiggle, int rightWiggle, int maxGap) {
+    return leftWiggle <= maxGap || rightWiggle <= maxGap;
+}
+
+std::string getFramePerfectTierLabel(int leftWiggle, int rightWiggle) {
+    std::string result;
+
+    auto append = [&](int maxGap, char const* label) {
+        if (!isFramePerfectForTier(leftWiggle, rightWiggle, maxGap))
+            return;
+        if (!result.empty())
+            result += "/";
+        result += label;
     };
 
-    clearPlayer(layer->m_player1);
-    clearPlayer(layer->m_player2);
+    append(2, "60");
+    append(1, "144");
+    append(0, "240");
 
-    auto& g = Global::get();
-    for (int i = 0; i < 6; i++) {
-        g.heldButtons[i] = false;
-        g.wasHolding[i] = false;
-    }
-
-    g.delayedFrameRelease[0][0] = -1;
-    g.delayedFrameRelease[0][1] = -1;
-    g.delayedFrameRelease[1][0] = -1;
-    g.delayedFrameRelease[1][1] = -1;
-    g.delayedFrameReleaseMain[0] = -1;
-    g.delayedFrameReleaseMain[1] = -1;
-    g.delayedFrameInput[0] = -1;
-    g.delayedFrameInput[1] = -1;
-    g.ignoreFrame = -1;
-    g.ignoreJumpButton = -1;
+    return result.empty() ? "None" : result;
 }
 
-void handleIOSAppInterrupted() {
-    auto& g = Global::get();
+int getFramePerfectGap(input const& earlier, input const& later) {
+    return std::max(0, static_cast<int>(later.frame) - static_cast<int>(earlier.frame) - 1);
+}
 
-    if (g.layer)
-        detachActiveInputsRecursive(g.layer);
-    if (CCScene* scene = CCDirector::sharedDirector()->getRunningScene())
-        detachActiveInputsRecursive(scene);
-    if (g.layer) {
-        if (auto* recordLayer = typeinfo_cast<RecordLayer*>(g.layer))
-            recordLayer->onClose(nullptr);
-        else
-            g.layer->removeFromParentAndCleanup(true);
-        g.layer = nullptr;
+bool canInputsFormFramePerfect(input const& earlier, input const& later) {
+    if (later.frame <= earlier.frame)
+        return false;
+    if (earlier.player2 != later.player2)
+        return false;
+    if (earlier.button != later.button)
+        return false;
+    if (earlier.down == later.down)
+        return false;
+    return getFramePerfectGap(earlier, later) <= kFramePerfectMaxGap;
+}
+
+int findLiveFramePerfectWiggle(std::vector<input> const& inputs, size_t actionIndex) {
+    if (actionIndex >= inputs.size())
+        return -1;
+
+    auto const& currentInput = inputs[actionIndex];
+
+    for (size_t i = actionIndex; i-- > 0;) {
+        auto const& candidate = inputs[i];
+        if (candidate.frame < currentInput.frame - (kFramePerfectMaxGap + 1))
+            break;
+
+        if (candidate.player2 != currentInput.player2)
+            continue;
+        if (candidate.button != currentInput.button)
+            continue;
+        if (candidate.down == currentInput.down)
+            continue;
+
+        return getFramePerfectGap(candidate, currentInput);
     }
 
-    PlayLayer* pl = PlayLayer::get();
-    LevelEditorLayer* editor = LevelEditorLayer::get();
-    clearRuntimeInputState(pl ? static_cast<GJBaseGameLayer*>(pl) : static_cast<GJBaseGameLayer*>(editor));
-
-    bool wasActive = g.state != state::none;
-
-    g.state = state::none;
-    g.restart = false;
-    g.restartLater = false;
-    g.leftOver = 0.f;
-    g.currentAction = 0;
-    g.currentFrameFix = 0;
-    Macro::resetVariables();
-
-    if (pl && !pl->m_isPaused && !pl->m_levelEndAnimationStarted)
-        pl->pauseGame(false);
-
-    Interface::updateLabels();
-    Interface::updateButtons();
-
-    if (wasActive)
-        log::info("Stopped active geobot session for iOS app interruption");
+    return -1;
 }
-#endif
 
+bool shouldCollectFramePerfectCalibration() {
+    return Global::isDeveloperModeEnabled();
+}
 
+void appendFramePerfectCalibrationRow(
+    char const* eventType,
+    char const* source,
+    size_t actionIndex,
+    int frame,
+    int button,
+    bool player2,
+    bool down,
+    int leftWiggle,
+    int rightWiggle,
+    std::string const& typeName,
+    size_t partnerActionIndex = std::numeric_limits<size_t>::max(),
+    int partnerFrame = -1
+) {
+    if (!shouldCollectFramePerfectCalibration())
+        return;
 
+    auto* mod = Mod::get();
+    if (!mod)
+        return;
 
+    std::filesystem::path path = mod->getSaveDir() / "frameperfect_calibration.csv";
+    bool needsHeader = !std::filesystem::exists(path);
 
+    std::ofstream out(path, std::ios::app);
+    if (!out.is_open())
+        return;
+
+    if (needsHeader) {
+        out << "session,event,source,action_index,partner_action_index,frame,partner_frame,button,player2,down,left_wiggle,right_wiggle,tier,type_name\n";
+    }
+
+    auto& g = Global::get();
+    out << g.currentSession << ','
+        << eventType << ','
+        << source << ','
+        << actionIndex << ',';
+
+    if (partnerActionIndex == std::numeric_limits<size_t>::max())
+        out << -1;
+    else
+        out << partnerActionIndex;
+
+    out << ','
+        << frame << ','
+        << partnerFrame << ','
+        << button << ','
+        << (player2 ? 1 : 0) << ','
+        << (down ? 1 : 0) << ','
+        << leftWiggle << ','
+        << rightWiggle << ','
+        << getFramePerfectTierLabel(leftWiggle, rightWiggle) << ','
+        << '"' << typeName << "\"\n";
+}
 
 void clearMovementStateForRespawnWindow(GJBaseGameLayer* layer) {
     if (!layer) return;
@@ -143,7 +191,8 @@ class $modify(PlayLayer) {
         auto& g = Global::get();
 
         if (g.state == state::playing) {
-            Macro::preparePlayback();
+            g.currentAction = 0;
+            g.currentFrameFix = 0;
             g.previousFrame = 0;
             g.respawnFrame = -1;
             g.leftOver = 0.f;
@@ -157,37 +206,8 @@ class $modify(PlayLayer) {
         auto now = std::chrono::system_clock::now();
         g.currentSession = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
         g.lastAutoSaveFrame = 0;
-        g.botUsedInLevelSession = g.state != state::none;
 
         return true;
-    }
-
-    void onExit() {
-        PlayLayer::onExit();
-        Global::get().botUsedInLevelSession = false;
-    }
-
-    void showNewBest(bool po, int p1, int p2, bool p3, bool p4, bool p5) {
-        if (!shouldBlockRewards())
-            PlayLayer::showNewBest(po, p1, p2, p3, p4, p5);
-    }
-
-    void levelComplete() {
-        auto& g = Global::get();
-        if (shouldBlockRewards())
-            m_isTestMode = true;
-
-        PlayLayer::levelComplete();
-    }
-
-    void destroyPlayer(PlayerObject* player, GameObject* object) {
-        auto& g = Global::get();
-        if (g.state == state::playing || g.state == state::recording) {
-            g.macroUsedInAttempt = true;
-            g.botUsedInLevelSession = true;
-        }
-
-        PlayLayer::destroyPlayer(player, object);
     }
 
     void resetLevel() {
@@ -222,16 +242,23 @@ class $modify(PlayLayer) {
         Macro::resetVariables();
 
         g.macroUsedInAttempt = false;
+        Global::resetFramePerfectStats();
 
         int frame = Global::getCurrentFrame();
         g.clearMovementUntilFrame = frame + (kRespawnMovementClearFrames - 1);
 
+        if (!m_isPracticeMode)
+            g.renderer.levelStartFrame = frame;
+
         if (g.restart && m_levelSettings->m_platformerMode && g.state != state::none)
             m_fields->delayedLevelRestart = frame + 2;
 
+        Global::updateSeed(true);
 
+        g.safeMode = g.layoutMode;
         g.leftOver = 0.f;
-        Macro::seekPlayback(0);
+        g.currentAction = 0;
+        g.currentFrameFix = 0;
         g.restart = false;
 
         if (g.state == state::recording)
@@ -277,121 +304,21 @@ class $modify(PlayLayer) {
     }
 };
 
-class $modify(GJGameLevel) {
-    void savePercentage(int p0, bool p1, int p2, int p3, bool p4) {
-        if (!shouldBlockRewards())
-            GJGameLevel::savePercentage(p0, p1, p2, p3, p4);
-    }
-};
-
-class $modify(GameStatsManager) {
-    void awardCurrencyForLevel(GJGameLevel* level) {
-        if (!shouldBlockRewards())
-            GameStatsManager::awardCurrencyForLevel(level);
-    }
-
-    void awardDiamondsForLevel(GJGameLevel* level) {
-        if (!shouldBlockRewards())
-            GameStatsManager::awardDiamondsForLevel(level);
-    }
-
-    bool awardSecretKey() {
-        if (shouldBlockRewards())
-            return false;
-        return GameStatsManager::awardSecretKey();
-    }
-
-    void completedLevel(GJGameLevel* level) {
-        if (!shouldBlockRewards())
-            GameStatsManager::completedLevel(level);
-    }
-
-    void completedStarLevel(GJGameLevel* level) {
-        if (!shouldBlockRewards())
-            GameStatsManager::completedStarLevel(level);
-    }
-
-    void markLevelAsCompletedAndClaimed(GJGameLevel* level) {
-        if (!shouldBlockRewards())
-            GameStatsManager::markLevelAsCompletedAndClaimed(level);
-    }
-
-    void completedMapPack(GJMapPack* pack) {
-        if (!shouldBlockRewards())
-            GameStatsManager::completedMapPack(pack);
-    }
-
-    void completedDemonLevel(GJGameLevel* level) {
-        if (!shouldBlockRewards())
-            GameStatsManager::completedDemonLevel(level);
-    }
-
-    GJRewardItem* completedDailyLevel(GJGameLevel* level) {
-        if (shouldBlockRewards())
-            return nullptr;
-        return GameStatsManager::completedDailyLevel(level);
-    }
-
-    void checkCoinAchievement(GJGameLevel* level) {
-        if (!shouldBlockRewards())
-            GameStatsManager::checkCoinAchievement(level);
-    }
-
-    void checkAchievement(char const* key) {
-        if (!shouldBlockRewards())
-            GameStatsManager::checkAchievement(key);
-    }
-
-    void incrementChallenge(GJChallengeType type, int amount) {
-        if (!shouldBlockRewards())
-            GameStatsManager::incrementChallenge(type, amount);
-    }
-
-    void storeUserCoin(char const* key) {
-        if (!shouldBlockRewards())
-            GameStatsManager::storeUserCoin(key);
-    }
-
-    void storeSecretCoin(char const* key) {
-        if (!shouldBlockRewards())
-            GameStatsManager::storeSecretCoin(key);
-    }
-
-    void incrementStat(char const* key, int amount) {
-        if (!shouldBlockRewards())
-            GameStatsManager::incrementStat(key, amount);
-    }
-
-    void setStat(char const* key, int value) {
-        if (!shouldBlockRewards())
-            GameStatsManager::setStat(key, value);
-    }
-};
-
-#ifdef GEODE_IS_IOS
-class $modify(AppDelegate) {
-    void applicationDidEnterBackground() {
-        handleIOSAppInterrupted();
-        AppDelegate::applicationDidEnterBackground();
-    }
-
-    void applicationWillEnterForeground() {
-        AppDelegate::applicationWillEnterForeground();
-
-        auto& g = Global::get();
-        g.leftOver = 0.f;
-        if (PlayLayer* pl = PlayLayer::get())
-            clearRuntimeInputState(pl);
-        else if (LevelEditorLayer* editor = LevelEditorLayer::get())
-            clearRuntimeInputState(editor);
-    }
-};
-#endif
-
 class $modify(BGLHook, GJBaseGameLayer) {
     struct Fields {
         bool macroInput = false;
 
+        struct PendingFramePerfect {
+            size_t actionIndex = 0;
+            int inputFrame = 0;
+            int button = 0;
+            bool down = false;
+            bool player2 = false;
+            int leftWiggle = -1;
+            std::string typeName;
+        };
+
+        std::vector<PendingFramePerfect> pendingFramePerfects;
     };
 
     void processCommands(float dt, bool isHalfTick, bool isLastTick) {
@@ -401,15 +328,22 @@ class $modify(BGLHook, GJBaseGameLayer) {
         if (pl && pl != typeinfo_cast<PlayLayer*>(this))
             return GJBaseGameLayer::processCommands(dt, isHalfTick, isLastTick);
 
+        Global::updateSeed();
 
-        if (g.state != state::none) {
+        bool rendering = g.renderer.recording || g.renderer.recordingAudio;
+        if (g.state != state::none || rendering) {
+            if (!g.firstAttempt) {
+                g.renderer.dontRender = false;
+                g.renderer.dontRecordAudio = false;
+            }
 
             int frame = Global::getCurrentFrame(!pl);
             if (frame > 2 && g.firstAttempt && g.macro.geobotMacro) {
                 g.firstAttempt = false;
 
                 if (pl && !m_levelEndAnimationStarted) {
-                                return pl->resetLevelFromStart();
+                    Global::resetFramePerfectStats();
+                    return pl->resetLevelFromStart();
                 }
             }
 
@@ -423,19 +357,17 @@ class $modify(BGLHook, GJBaseGameLayer) {
         if (pl && frame <= g.clearMovementUntilFrame)
             clearMovementStateForRespawnWindow(this);
 
-
         if (g.state == state::none)
             return;
 
         if (pl && !m_levelEndAnimationStarted && (g.state == state::playing || g.state == state::recording))
             g.macroUsedInAttempt = true;
-        if (pl && (g.state == state::playing || g.state == state::recording))
-            g.botUsedInLevelSession = true;
 
         g.previousFrame = frame;
 
         if (pl && g.macro.geobotMacro && g.restart && !m_levelEndAnimationStarted) {
-                return pl->resetLevelFromStart();
+            Global::resetFramePerfectStats();
+            return pl->resetLevelFromStart();
         }
 
         if (g.state == state::recording)
@@ -489,8 +421,10 @@ class $modify(BGLHook, GJBaseGameLayer) {
         if (!g.frameFixes || g.macro.inputs.empty())
             return;
 
-        if (!g.macro.frameFixes.empty() && g.macro.frameFixes.back().frame == frame)
-            return;
+        if (!g.macro.frameFixes.empty()) {
+            if (1.f / Global::getTPS() * (frame - g.macro.frameFixes.back().frame) < 1.f / g.frameFixesLimit)
+                return;
+        }
 
         g.macro.recordFrameFix(frame, m_player1, m_player2);
     }
@@ -501,56 +435,48 @@ class $modify(BGLHook, GJBaseGameLayer) {
             return;
 
         if (m_player1->m_isDead) {
+            m_fields->pendingFramePerfects.clear();
             m_player1->releaseAllButtons();
             m_player2->releaseAllButtons();
 
-
             if (PlayLayer* pl = PlayLayer::get(); pl && !pl->m_isPracticeMode) {
-                        pl->resetLevelFromStart();
+                Global::resetFramePerfectStats();
+                pl->resetLevelFromStart();
             }
             return;
         }
 
         m_fields->macroInput = true;
 
-        auto const& inputs = g.macro.inputs;
-        size_t actionCount = inputs.size();
-        bool flipControls = false;
-        bool hasFlipState = false;
-
-        while (g.currentAction < actionCount && frame >= inputs[g.currentAction].frame) {
-            auto const& macroInput = inputs[g.currentAction];
+        while (g.currentAction < g.macro.inputs.size() && frame >= g.macro.inputs[g.currentAction].frame) {
+            size_t actionIndex = g.currentAction;
+            auto const& macroInput = g.macro.inputs[g.currentAction];
 
             if (frame != g.respawnFrame) {
-                if (!hasFlipState) {
-                    flipControls = Macro::flipControls();
-                    hasFlipState = true;
-                }
-                bool inputPlayer2 = flipControls ? !macroInput.player2 : macroInput.player2;
+                bool inputPlayer2 = Macro::flipControls() ? !macroInput.player2 : macroInput.player2;
+                processRealtimeFramePerfect(actionIndex, macroInput);
                 GJBaseGameLayer::handleButton(macroInput.down, macroInput.button, inputPlayer2);
             }
 
             g.currentAction++;
+            g.safeMode = true;
         }
 
         g.respawnFrame = -1;
         m_fields->macroInput = false;
 
+        trimExpiredPendingFramePerfects(frame);
 
-        if (g.currentAction == actionCount && g.stopPlaying) {
+        if (g.currentAction == g.macro.inputs.size() && g.stopPlaying) {
             Macro::togglePlaying();
             Macro::resetState(true);
             return;
         }
 
         if (g.frameFixes || g.inputFixes) {
-            auto const& frameFixes = g.macro.frameFixes;
-            size_t frameFixCount = frameFixes.size();
-            bool dualMode = m_gameState.m_isDualMode;
-
-            while (g.currentFrameFix < frameFixCount &&
-                   frame >= frameFixes[g.currentFrameFix].frame) {
-                auto const& fix = frameFixes[g.currentFrameFix];
+            while (g.currentFrameFix < g.macro.frameFixes.size() &&
+                   frame >= g.macro.frameFixes[g.currentFrameFix].frame) {
+                auto& fix = g.macro.frameFixes[g.currentFrameFix];
 
                 PlayerObject* p1 = m_player1;
                 PlayerObject* p2 = m_player2;
@@ -561,7 +487,7 @@ class $modify(BGLHook, GJBaseGameLayer) {
                 if (fix.p1.rotate && fix.p1.rotation != 0.f)
                     p1->setRotation(fix.p1.rotation);
 
-                if (dualMode) {
+                if (m_gameState.m_isDualMode) {
                     if (fix.p2.pos.x != 0.f && fix.p2.pos.y != 0.f)
                         p2->setPosition(fix.p2.pos);
 
@@ -574,26 +500,193 @@ class $modify(BGLHook, GJBaseGameLayer) {
         }
     }
 
+    void processRealtimeFramePerfect(size_t actionIndex, input const& currentInput) {
+        auto& g = Global::get();
+        if (!Global::isFramePerfectDetectionEnabled()) {
+            m_fields->pendingFramePerfects.clear();
+            return;
+        }
+        if (!isTrackedFramePerfectInput(this, currentInput))
+            return;
 
+        std::string typeName = getFramePerfectTypeName(currentInput.button, currentInput.down);
+        int leftWiggle = findLiveFramePerfectWiggle(g.macro.inputs, actionIndex);
+        int currentFrame = static_cast<int>(currentInput.frame);
 
+        Global::triggerFramePerfectOverlayProgress(
+            currentInput.button,
+            currentInput.down,
+            typeName,
+            std::max(0, leftWiggle),
+            0
+        );
 
+        appendFramePerfectCalibrationRow(
+            "tracked",
+            "current",
+            actionIndex,
+            currentFrame,
+            currentInput.button,
+            currentInput.player2,
+            currentInput.down,
+            leftWiggle,
+            -1,
+            typeName
+        );
+
+        auto& pending = m_fields->pendingFramePerfects;
+        size_t write = 0;
+        for (size_t i = 0; i < pending.size(); i++) {
+            auto const& candidate = pending[i];
+            input pendingInput(candidate.inputFrame, candidate.button, candidate.player2, candidate.down);
+
+            if (!canInputsFormFramePerfect(pendingInput, currentInput))
+                continue;
+
+            int rightWiggle = getFramePerfectGap(pendingInput, currentInput);
+            appendFramePerfectCalibrationRow(
+                "matched",
+                "pending",
+                candidate.actionIndex,
+                candidate.inputFrame,
+                candidate.button,
+                candidate.player2,
+                candidate.down,
+                candidate.leftWiggle == -1 ? kFramePerfectMaxGap + 1 : candidate.leftWiggle,
+                rightWiggle,
+                candidate.typeName,
+                actionIndex,
+                currentFrame
+            );
+
+            Global::triggerFramePerfectOverlayCounted(
+                candidate.actionIndex,
+                candidate.button,
+                candidate.down,
+                candidate.typeName,
+                candidate.leftWiggle == -1 ? kFramePerfectMaxGap + 1 : candidate.leftWiggle,
+                rightWiggle
+            );
+        }
+
+        for (size_t i = 0; i < pending.size(); i++) {
+            auto const& candidate = pending[i];
+            input pendingInput(candidate.inputFrame, candidate.button, candidate.player2, candidate.down);
+
+            if (canInputsFormFramePerfect(pendingInput, currentInput))
+                continue;
+
+            if (write != i)
+                pending[write] = candidate;
+            write++;
+        }
+        pending.resize(write);
+
+        if (leftWiggle != -1) {
+            appendFramePerfectCalibrationRow(
+                "matched",
+                "left",
+                actionIndex,
+                currentFrame,
+                currentInput.button,
+                currentInput.player2,
+                currentInput.down,
+                leftWiggle,
+                kFramePerfectMaxGap + 1,
+                typeName
+            );
+
+            Global::triggerFramePerfectOverlayCounted(
+                actionIndex,
+                currentInput.button,
+                currentInput.down,
+                typeName,
+                leftWiggle,
+                kFramePerfectMaxGap + 1
+            );
+            return;
+        }
+
+        pending.push_back({
+            actionIndex,
+            currentFrame,
+            currentInput.button,
+            currentInput.down,
+            currentInput.player2,
+            leftWiggle,
+            typeName
+        });
+
+        appendFramePerfectCalibrationRow(
+            "pending",
+            "queued",
+            actionIndex,
+            currentFrame,
+            currentInput.button,
+            currentInput.player2,
+            currentInput.down,
+            leftWiggle,
+            -1,
+            typeName
+        );
+    }
+
+    void trimExpiredPendingFramePerfects(int frame) {
+        if (!Global::isFramePerfectDetectionEnabled()) {
+            m_fields->pendingFramePerfects.clear();
+            return;
+        }
+        auto& pending = m_fields->pendingFramePerfects;
+        if (pending.empty())
+            return;
+
+        for (auto const& candidate : pending) {
+            if (frame <= candidate.inputFrame + kFramePerfectMaxGap + 1)
+                continue;
+
+            appendFramePerfectCalibrationRow(
+                "expired",
+                "timeout",
+                candidate.actionIndex,
+                candidate.inputFrame,
+                candidate.button,
+                candidate.player2,
+                candidate.down,
+                candidate.leftWiggle,
+                -1,
+                candidate.typeName
+            );
+        }
+
+        auto it = std::remove_if(
+            pending.begin(),
+            pending.end(),
+            [frame](auto const& candidate) {
+                return frame > candidate.inputFrame + kFramePerfectMaxGap + 1;
+            }
+        );
+        pending.erase(it, pending.end());
+    }
 
     void handleButton(bool hold, int button, bool player2) {
         auto& g = Global::get();
 
-
+        if (g.p2mirror && m_gameState.m_isDualMode && !g.autoclicker) {
+            GJBaseGameLayer::handleButton(
+                g.mod->getSavedValue<bool>("p2_input_mirror_inverted") ? !hold : hold,
+                button,
+                !player2
+            );
+        }
 
         if (g.state == state::recording &&
             !m_fields->macroInput &&
             !g.ignoreRecordAction &&
             !m_levelEndAnimationStarted) {
             int frame = Global::getCurrentFrame(!PlayLayer::get());
-            // Respect ignoreFrame for a range: skip recording while
-            // frame <= g.ignoreFrame (g.ignoreFrame == -1 means disabled).
-            if (g.ignoreFrame == -1 || frame > g.ignoreFrame)
+            if (frame != g.ignoreFrame)
                 Macro::recordAction(frame, button, player2, hold);
         }
-
 
         GJBaseGameLayer::handleButton(hold, button, player2);
     }

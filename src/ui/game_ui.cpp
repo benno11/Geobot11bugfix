@@ -4,34 +4,286 @@
 #include <Geode/modify/PlayLayer.hpp>
 
 class $modify(PlayLayer) {
-    bool init(GJGameLevel* level, bool useReplay, bool dontCreateObjects) {
-        if (!PlayLayer::init(level, useReplay, dontCreateObjects)) return false;
+
+    struct Fields {
+        CCLabelBMFont* frameLabel = nullptr;
+        CCLabelBMFont* framePerfectLabel = nullptr;
+        CCScale9Sprite* framePerfectBg = nullptr;
+    };
+
+    void postUpdate(float dt) {
+        PlayLayer::postUpdate(dt);
+        auto& g = Global::get();
+
+        if (g.state != state::none && g.frameLabel && !g.renderer.recording)
+            m_fields->frameLabel->setString(("Frame: " + std::to_string(Global::getCurrentFrame())).c_str());
+
+        if (m_fields->framePerfectLabel && m_fields->framePerfectBg) {
+            Global::refreshFramePerfectOverlayText();
+            std::string mode = Global::getFramePerfectOverlayMode();
+
+            bool labelAllowed = !g.renderer.recording &&
+                                !g.mod->getSavedValue<bool>("macro_hide_labels") &&
+                                !(g.renderer.recording && g.mod->getSavedValue<bool>("render_hide_labels"));
+
+            bool canShow = false;
+            if (mode == "Always")
+                canShow = labelAllowed;
+            else if (mode == "When")
+                canShow = labelAllowed && g.framePerfectOverlayFrames > 0;
+
+            if (canShow && mode == "When") {
+                m_fields->framePerfectLabel->setVisible(true);
+                m_fields->framePerfectBg->setVisible(true);
+                m_fields->framePerfectLabel->setString(g.framePerfectOverlayText.c_str());
+                auto size = m_fields->framePerfectLabel->getContentSize();
+                float scale = m_fields->framePerfectLabel->getScale();
+                m_fields->framePerfectBg->setContentSize({ std::max(210.f, size.width * scale + 18.f), 50.f });
+                g.framePerfectOverlayFrames--;
+            } else if (canShow && mode == "Always") {
+                m_fields->framePerfectLabel->setVisible(true);
+                m_fields->framePerfectBg->setVisible(true);
+                if (g.framePerfectOverlayText.empty())
+                    m_fields->framePerfectLabel->setString("FRAME PERFECT\nWaiting for input\nOverlay armed");
+                else
+                    m_fields->framePerfectLabel->setString(g.framePerfectOverlayText.c_str());
+                auto size = m_fields->framePerfectLabel->getContentSize();
+                float scale = m_fields->framePerfectLabel->getScale();
+                m_fields->framePerfectBg->setContentSize({ std::max(210.f, size.width * scale + 18.f), 50.f });
+            } else {
+                m_fields->framePerfectLabel->setVisible(false);
+                m_fields->framePerfectBg->setVisible(false);
+            }
+        }
+    }
+
+    bool init(GJGameLevel * level, bool b1, bool b2) {
+        if (!PlayLayer::init(level, b1, b2)) return false;
+
         Interface::addLabels(this);
+        Interface::addButtons(this);
+
+        m_fields->frameLabel = static_cast<CCLabelBMFont*>(getChildByID("frame-label"_spr));
+        m_fields->framePerfectLabel = static_cast<CCLabelBMFont*>(getChildByID("frame-perfect-label"_spr));
+        m_fields->framePerfectBg = typeinfo_cast<CCScale9Sprite*>(getChildByID("frame-perfect-bg"_spr));
+
         return true;
     }
 };
 
 void Interface::addLabels(PlayLayer* pl) {
-    auto* label = CCLabelBMFont::create("", "chatFont.fnt");
-    label->setPosition({ CCDirector::sharedDirector()->getWinSize().width - 6.5f, 12.f });
-    label->setAnchorPoint({ 1.f, 0.5f });
-    label->setID("state-label"_spr);
-    label->setZOrder(300);
-    label->setScale(0.625f);
-    pl->addChild(label);
+    CCLabelBMFont* lbl = CCLabelBMFont::create("", "chatFont.fnt");
+    lbl->setPosition({ CCDirector::sharedDirector()->getWinSize().width - 6.5f, 12 });
+    lbl->setAnchorPoint({ 1, 0.5 });
+    lbl->setID("state-label"_spr);
+    lbl->setZOrder(300);
+    lbl->setScale(0.625f);
+    pl->addChild(lbl);
+
+    lbl = CCLabelBMFont::create("", "chatFont.fnt");
+    lbl->setPosition({ 6.5f, 12 });
+    lbl->setAnchorPoint({ 0, 0.5 });
+    lbl->setID("frame-label"_spr);
+    lbl->setZOrder(300);
+    lbl->setScale(0.625f);
+    pl->addChild(lbl);
+
+    lbl = CCLabelBMFont::create("Recording Audio", "bigFont.fnt");
+    lbl->setPosition(pl->getContentSize() / 2);
+    lbl->setID("recording-audio-label"_spr);
+    lbl->setZOrder(300);
+    lbl->setOpacity(75);
+    lbl->setVisible(false);
+    pl->addChild(lbl);
+
+    auto bg = CCScale9Sprite::create("square02b_001.png", { 0, 0, 80, 80 });
+    bg->setPosition({ CCDirector::sharedDirector()->getWinSize().width / 2.f, 44.f });
+    bg->setContentSize({ 210.f, 50.f });
+    bg->setOpacity(90);
+    bg->setVisible(false);
+    bg->setID("frame-perfect-bg"_spr);
+    bg->setZOrder(300);
+    pl->addChild(bg);
+
+    lbl = CCLabelBMFont::create("", "chatFont.fnt");
+    lbl->setPosition({ CCDirector::sharedDirector()->getWinSize().width / 2.f, 44.f });
+    lbl->setAnchorPoint({ 0.5f, 0.5f });
+    lbl->setID("frame-perfect-label"_spr);
+    lbl->setZOrder(301);
+    lbl->setScale(0.48f);
+    lbl->setVisible(false);
+    pl->addChild(lbl);
+
     Interface::updateLabels();
 }
 
-void Interface::addButtons(PlayLayer*) {}
+void Interface::addButtons(PlayLayer* pl) {
+    cocos2d::CCSize winSize = CCDirector::sharedDirector()->getWinSize();
 
-void Interface::updateLabels() {
-    auto* pl = PlayLayer::get();
-    if (!pl) return;
-    auto* label = typeinfo_cast<CCLabelBMFont*>(pl->getChildByID("state-label"_spr));
-    if (!label) return;
+    CCMenu* menu = CCMenu::create();
+    menu->setZOrder(300);
+    menu->setPosition({ 0, 0 });
+    menu->setID("button-menu"_spr);
+    pl->addChild(menu);
 
-    auto state = Global::get().state;
-    label->setString(state == state::recording ? "Recording" : state == state::playing ? "Playing" : "");
+    CCSprite* spr = CCSprite::createWithSpriteFrameName("GJ_arrow_02_001.png");
+    spr->setFlipX(true);
+
+    CCMenuItemSpriteExtra* btn = CCMenuItemSpriteExtra::create(spr, pl, menu_selector(Interface::onFrameStepper));
+    btn->setAnchorPoint({ 0, 0 });
+    btn->setID("step-frame-btn");
+    CCSprite* sprite = btn->getChildByType<CCSprite>(0);
+    sprite->setPosition({ 0, 0 });
+
+    menu->addChild(btn);
+
+    spr = CCSprite::createWithSpriteFrameName("GJ_deleteIcon_001.png");
+
+    btn = CCMenuItemSpriteExtra::create(spr, pl, menu_selector(Interface::onFrameStepperOff));
+    btn->setID("disable-stepper-btn");
+    btn->setAnchorPoint({ 0, 0 });
+    sprite = btn->getChildByType<CCSprite>(0);
+    sprite->setPosition({ 0, 0 });
+
+    menu->addChild(btn);
+
+    spr = CCSprite::createWithSpriteFrameName("GJ_timeIcon_001.png");
+
+    btn = CCMenuItemSpriteExtra::create(spr, pl, menu_selector(Interface::onSpeedhack));
+    btn->setAnchorPoint({ 0, 0 });
+    btn->setID("speedhack-btn");
+    sprite = btn->getChildByType<CCSprite>(0);
+    sprite->setPosition({ 0, 0 });
+
+    menu->addChild(btn);
+
+    Interface::updateButtons();
 }
 
-void Interface::updateButtons() {}
+void Interface::updateLabels() {
+    PlayLayer* pl = PlayLayer::get();
+    auto& g = Global::get();
+
+    if (!pl) return;
+
+    if (g.state == state::none || !g.frameLabel)
+        static_cast<CCLabelBMFont*>(pl->getChildByID("frame-label"_spr))->setString("");
+
+    CCLabelBMFont* label = typeinfo_cast<CCLabelBMFont*>(pl->getChildByID("state-label"_spr));
+
+    if (!label) return;
+
+    if (g.mod->getSavedValue<bool>("macro_hide_labels"))
+        return label->setString("");
+
+    state state = g.state;
+    std::string labelText = state == state::none ? "" : "Playing";
+    if (state == state::recording)
+        labelText = "Recording";
+
+    if (labelText == "Recording" && state == state::recording && g.mod->getSavedValue<bool>("macro_hide_recording_label"))
+        labelText = "";
+
+    if (labelText == "Playing" && state == state::playing && g.mod->getSavedValue<bool>("macro_hide_playing_label"))
+        labelText = "";
+
+    if (g.renderer.recording && g.mod->getSavedValue<bool>("render_hide_labels")) {
+        labelText = "";
+        if (CCLabelBMFont* lbl = typeinfo_cast<CCLabelBMFont*>(pl->getChildByID("frame-label"_spr)))
+            lbl->setString("");
+    }
+
+    if (g.pathfinderMode && !g.renderer.recording) {
+        std::string pathfinderLabel = g.pathfinderSearching ? "Pathfinder" : "Pathfinder Ready";
+        if (labelText.empty())
+            labelText = pathfinderLabel;
+        else
+            labelText += " | " + pathfinderLabel;
+    }
+
+    label->setString(labelText.c_str());
+}
+
+void Interface::updateButtons() {
+    PlayLayer* pl = PlayLayer::get();
+    if (!pl) return;
+
+    CCNode* menu = pl->getChildByID("button-menu"_spr);
+    if (!menu) return;
+
+    auto& g = Global::get();
+
+#ifdef GEODE_IS_WINDOWS
+    bool isWindows = true;
+#else
+    bool isWindows = false;
+#endif
+
+    CCNode* disableStepperBtn = menu->getChildByID("disable-stepper-btn");
+    CCNode* stepFrameBtn = menu->getChildByID("step-frame-btn");
+    CCNode* speedhackBtn = menu->getChildByID("speedhack-btn");
+
+    disableStepperBtn->setPosition(ccp(
+        g.mod->getSavedValue<float>("button_off_pos_x"),
+        g.mod->getSavedValue<float>("button_off_pos_y")
+    ));
+
+    float scale = g.mod->getSavedValue<float>("button_off_scale");
+
+    CCSprite* sprite = disableStepperBtn->getChildByType<CCSprite>(0);
+    sprite->setScale(scale);
+    sprite->setOpacity(static_cast<int>(g.mod->getSavedValue<float>("button_off_opacity") * 255));
+    sprite->setAnchorPoint({ 0, 0 });
+
+    cocos2d::CCSize size = sprite->getContentSize();
+    disableStepperBtn->setContentSize({ size.width * scale, size.height * scale });
+
+    stepFrameBtn->setPosition(ccp(
+        g.mod->getSavedValue<float>("button_advance_frame_pos_x"),
+        g.mod->getSavedValue<float>("button_advance_frame_pos_y")
+    ));
+
+    scale = g.mod->getSavedValue<float>("button_advance_frame_scale");
+
+    sprite = stepFrameBtn->getChildByType<CCSprite>(0);
+    sprite->setScale(scale);
+    sprite->setOpacity(static_cast<int>(g.mod->getSavedValue<float>("button_advance_frame_opacity") * 255));
+    sprite->setAnchorPoint({ 0, 0 });
+
+    size = sprite->getContentSize();
+    speedhackBtn->setContentSize({ size.width * scale, size.height * scale });
+
+    speedhackBtn->setPosition(ccp(
+        g.mod->getSavedValue<float>("button_speedhack_pos_x"),
+        g.mod->getSavedValue<float>("button_speedhack_pos_y")
+    ));
+
+    scale = g.mod->getSavedValue<float>("button_speedhack_scale");
+
+    sprite = speedhackBtn->getChildByType<CCSprite>(0);
+    sprite->setScale(scale);
+    sprite->setOpacity(static_cast<int>(g.mod->getSavedValue<float>("button_speedhack_opacity") * 255));
+    sprite->setAnchorPoint({ 0, 0 });
+
+    size = sprite->getContentSize();
+    speedhackBtn->setContentSize({ size.width * scale, size.height * scale });
+
+    if ((g.state != state::recording && !g.mod->getSavedValue<bool>("macro_always_show_buttons")) || isWindows) {
+        disableStepperBtn->setVisible(false);
+        stepFrameBtn->setVisible(false);
+        speedhackBtn->setVisible(false);
+
+        return;
+    }
+
+    speedhackBtn->setVisible(!g.mod->getSavedValue<bool>("macro_hide_speedhack"));
+
+    if (g.mod->getSavedValue<bool>("macro_hide_stepper")) {
+        disableStepperBtn->setVisible(false);
+        stepFrameBtn->setVisible(false);
+    }
+    else {
+        stepFrameBtn->setVisible(true);
+        disableStepperBtn->setVisible(g.frameStepper);
+    }
+}

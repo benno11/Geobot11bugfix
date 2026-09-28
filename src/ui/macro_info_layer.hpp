@@ -8,7 +8,7 @@ public:
 
     static MacroInfoLayer* create() {
         MacroInfoLayer* ret = new MacroInfoLayer();
-        if (ret->initAnchored(417, 268, WINDOW_BG, CCRectZero)) {
+        if (ret->initAnchored(417, 268, "square01_001.png", CCRectZero)) {
             ret->autorelease();
             return ret;
         }
@@ -20,13 +20,12 @@ private:
 
     bool setup() override {
         setTitle("Current Macro");
-        adjustForLoadingScreen();
         auto& g = Global::get();
 
         int playerInputs[2][3][2] = { { { 0, 0 }, { 0, 0 }, { 0, 0 } }, { { 0, 0 }, { 0, 0 }, { 0, 0 } } };
-        int shortInputsByButton[3] = { 0, 0, 0 };
-        int shortInputPress = 0;
-        int shortInputRelease = 0;
+        int framePerfectByButton[3] = { 0, 0, 0 };
+        int framePerfectPress = 0;
+        int framePerfectRelease = 0;
 
         for (const auto& input : g.macro.inputs)
             playerInputs[input.player2][input.button - 1][input.down]++;
@@ -41,13 +40,13 @@ private:
             if (cur.down == prev.down) continue;
 
             if (cur.button >= 1 && cur.button <= 3)
-                shortInputsByButton[cur.button - 1]++;
+                framePerfectByButton[cur.button - 1]++;
 
-            if (cur.down) shortInputPress++;
-            else shortInputRelease++;
+            if (cur.down) framePerfectPress++;
+            else framePerfectRelease++;
         }
 
-        CCScale9Sprite* bg = CCScale9Sprite::create(WINDOW_BG, { 0, 0, 80, 80 });
+        CCScale9Sprite* bg = CCScale9Sprite::create("square02b_001.png", { 0, 0, 80, 80 });
         bg->setColor({ 0,0,0 });
         bg->setOpacity(75);
         bg->setPosition(ccp(29, 225));
@@ -55,7 +54,7 @@ private:
         bg->setContentSize({ 162, 202 });
         m_mainLayer->addChild(bg);
 
-        bg = CCScale9Sprite::create(WINDOW_BG, { 0, 0, 80, 80 });
+        bg = CCScale9Sprite::create("square02b_001.png", { 0, 0, 80, 80 });
         bg->setColor({ 0,0,0 });
         bg->setOpacity(75);
         bg->setPosition(ccp(226, 225));
@@ -206,15 +205,15 @@ private:
         lbl->setOpacity(150);
         m_mainLayer->addChild(lbl);
 
-        int totalShortInputs = shortInputPress + shortInputRelease;
+        int totalFramePerfects = framePerfectPress + framePerfectRelease;
         std::string fpSummary = fmt::format(
-            "Short inputs {} | Clk {} L {} R {} | Inp {} Rel {}",
-            totalShortInputs,
-            shortInputsByButton[0],
-            shortInputsByButton[1],
-            shortInputsByButton[2],
-            shortInputPress,
-            shortInputRelease
+            "FP {} | Clk {} L {} R {} | Inp {} Rel {}",
+            totalFramePerfects,
+            framePerfectByButton[0],
+            framePerfectByButton[1],
+            framePerfectByButton[2],
+            framePerfectPress,
+            framePerfectRelease
         );
 
         lbl = CCLabelBMFont::create(fpSummary.c_str(), "chatFont.fnt");

@@ -1,49 +1,11 @@
 #include "load_macro_layer.hpp"
+#include "autosave_settings_layer.hpp"
 #include "macro_editor.hpp"
 
 #include <Geode/modify/CCMenu.hpp>
-#include <sstream>
 #ifdef GEODE_IS_WINDOWS
 #include <Windows.h>
 #endif
-
-namespace {
-	CCSprite* createFavoriteSprite(bool active);
-
-	constexpr size_t kMacroListBatchSize = 12;
-	constexpr float kMacroRowHeight = 35.f;
-	constexpr float kMacroListWidth = 323.f;
-	constexpr float kMacroListHeight = 180.f;
-	constexpr char const* FAVORITE_MACROS_KEY = "favorite_macros";
-
-	bool isMacroFile(std::filesystem::path const& path) {
-		auto ext = path.extension();
-		return ext == ".gdr" || ext == ".xd" || ext == ".json";
-	}
-
-	std::string macroDisplayName(std::filesystem::path const& path) {
-		std::string filename = path.filename().string();
-		std::string name = filename.substr(0, filename.find_last_of('.'));
-		if (path.extension() == ".json")
-			name = name.substr(0, name.find_last_of('.'));
-		return name;
-	}
-
-	std::string macroPathID(std::filesystem::path const& path) {
-		return path.lexically_normal().generic_string();
-	}
-
-	bool favoriteListContains(std::string const& favoritesRaw, std::filesystem::path const& path) {
-		std::istringstream favorites(favoritesRaw);
-		std::string favorite;
-		std::string id = macroPathID(path);
-		while (std::getline(favorites, favorite)) {
-			if (favorite == id)
-				return true;
-		}
-		return false;
-	}
-}
 
 class $modify(CCMenu) {
 	virtual bool ccTouchBegan(cocos2d::CCTouch* touch, cocos2d::CCEvent* event) {
@@ -93,19 +55,28 @@ void LoadMacroLayer::textChanged(CCTextInputNode* node) {
 }
 
 void LoadMacroLayer::reloadList(int amount) {
+	if (CCNode* scrollbar = m_buttonMenu->getChildByID("scrollbar"))
+		scrollbar->removeFromParentAndCleanup(true);
+
+	if (CCNode* lbl = menu->getChildByID("no-macros-label"))
+		lbl->removeFromParentAndCleanup(true);
+
 	CCNode* listLayer = m_buttonMenu->getChildByID("list-layer");
-	if (!listLayer) {
-		addList();
-		return;
-	}
+	if (!listLayer) return;
+
+	ListView* listView = listLayer->getChildByType<ListView>(0);
+
+	CCLayer* contentLayer = nullptr;
+	contentLayer = typeinfo_cast<CCLayer*>(listView->m_tableView->getChildren()->objectAtIndex(0));
 
 	int childrenCount = 0;
 	float posY = 0.f;
-	if (macroScroll && macroScroll->m_contentLayer) {
-		childrenCount = static_cast<int>(allMacros.size());
-		posY = macroScroll->m_contentLayer->getPositionY();
-	}
+	if (contentLayer) {
+		if (CCArray* children = contentLayer->getChildren())
+			childrenCount = children->count();
 
+		posY = contentLayer->getPositionY();
+	}
 	listLayer->removeFromParentAndCleanup(true);
 	if (CCNode* bg = m_buttonMenu->getChildByID("background"))
 		bg->removeFromParentAndCleanup(true);
@@ -123,16 +94,21 @@ void LoadMacroLayer::showLoadingScreen() {
 	if (!loadingOverlay) {
 		CCSize layerSize = m_mainLayer->getContentSize();
 
-		CCNode* dim = CCNode::create();
+		CCLayerColor* dim = CCLayerColor::create({ 0, 0, 0, 110 });
 		dim->setContentSize(layerSize);
 		dim->setAnchorPoint({ 0.f, 0.f });
 		dim->setPosition({ 0, 0 });
 
+		CCScale9Sprite* panel = CCScale9Sprite::create("square02b_001.png", { 0, 0, 80, 80 });
+		panel->setContentSize({ 175.f, 62.f });
+		panel->setColor({ 0, 0, 0 });
+		panel->setOpacity(165);
+		panel->setPosition(layerSize / 2);
+		dim->addChild(panel);
+
 		loadingLabel = CCLabelBMFont::create(isAutosaves ? "Loading Autosaves..." : "Loading Macros...", "bigFont.fnt");
-		loadingLabel->setScale(0.32f);
-		loadingLabel->setOpacity(150);
-		loadingLabel->setAnchorPoint({ 1.f, 0.5f });
-		loadingLabel->setPosition({ layerSize.width - 18.f, 33.f });
+		loadingLabel->setScale(0.42f);
+		loadingLabel->setPosition(layerSize / 2);
 		dim->addChild(loadingLabel);
 
 		loadingOverlay = dim;
@@ -145,11 +121,21 @@ void LoadMacroLayer::showLoadingScreen() {
 
 	if (loadingOverlay)
 		loadingOverlay->setVisible(true);
+
+	if (menu)
+		menu->setEnabled(false);
+	if (m_buttonMenu)
+		m_buttonMenu->setEnabled(false);
 }
 
 void LoadMacroLayer::hideLoadingScreen() {
 	if (loadingOverlay)
 		loadingOverlay->setVisible(false);
+
+	if (menu)
+		menu->setEnabled(true);
+	if (m_buttonMenu)
+		m_buttonMenu->setEnabled(true);
 }
 
 void LoadMacroLayer::deleteSelected(CCObject*) {
@@ -187,8 +173,7 @@ void LoadMacroLayer::onSelectAll(CCObject* obj) {
 
 LoadMacroLayer* LoadMacroLayer::create(geode::Popup* layer, geode::Popup* layer2, bool autosaves) {
 	LoadMacroLayer* ret = new LoadMacroLayer();
-	std::string texture = Utils::getTexture();
-	if (ret->initAnchored(385, 291, layer, layer2, autosaves, texture.c_str())) {
+	if (ret->initAnchored(385, 291, layer, layer2, autosaves)) {
 		ret->autorelease();
 		return ret;
 	}
@@ -224,8 +209,13 @@ bool LoadMacroLayer::setup(geode::Popup* layer, geode::Popup* layer2, bool autos
 
 	setTitle(isMerge ? "Merge Macro" : "Load Macro");
 	m_title->setPositionY(m_title->getPositionY() + 5);
-	m_closeBtn->getNormalImage()->setScale(0.6f);
-	adjustForLoadingScreen();
+    m_closeBtn->getNormalImage()->setScale(0.6f);
+
+	cocos2d::CCPoint offset = (CCDirector::sharedDirector()->getWinSize() - m_mainLayer->getContentSize()) / 2;
+    m_mainLayer->setPosition(m_mainLayer->getPosition() - offset);
+    m_bgSprite->setPosition(m_bgSprite->getPosition() + offset);
+    m_closeBtn->setPosition(m_closeBtn->getPosition() + offset);
+    m_title->setPosition(m_title->getPosition() + offset);
 
 	if (!isMerge) {
 		CCSprite* icon = CCSprite::createWithSpriteFrameName("GJ_plusBtn_001.png");
@@ -270,7 +260,18 @@ bool LoadMacroLayer::setup(geode::Popup* layer, geode::Popup* layer2, bool autos
 
 		menu->addChild(btn);
 
+		if (isAutosaves) {
+			spr = CCSprite::createWithSpriteFrameName("GJ_optionsBtn_001.png");
+			spr->setScale(0.55f);
+			btn = CCMenuItemSpriteExtra::create(
+				spr,
+				this,
+				menu_selector(AutoSaveLayer::open)
+			);
+			btn->setPosition(ccp(15, -121));
 
+			menu->addChild(btn);
+		}
 	}
 
 	CCSprite* spr1 = CCSprite::create("GJ_button_01.png");
@@ -288,26 +289,6 @@ bool LoadMacroLayer::setup(geode::Popup* layer, geode::Popup* layer2, bool autos
 	sortToggle->setScale(0.55f);
 	sortToggle->toggle(false);
 	menu->addChild(sortToggle);
-
-	CCSprite* favoriteOff = createFavoriteSprite(false);
-	CCSprite* favoriteOn = createFavoriteSprite(true);
-	favoritesToggle = CCMenuItemToggler::create(
-		favoriteOff,
-		favoriteOn,
-		this,
-		menu_selector(LoadMacroLayer::updateFavoritesFilter)
-	);
-	favoritesToggle->setPosition({ -172, 70 });
-	favoritesToggle->setScale(0.48f);
-	favoritesToggle->setID("favorites-filter-toggle");
-	menu->addChild(favoritesToggle);
-
-	CCLabelBMFont* favoritesLabel = CCLabelBMFont::create("Favorites", "bigFont.fnt");
-	favoritesLabel->setAnchorPoint({ 0.f, 0.5f });
-	favoritesLabel->setPosition({ -157.f, 70.f });
-	favoritesLabel->setScale(0.32f);
-	favoritesLabel->setID("favorites-filter-label");
-	menu->addChild(favoritesLabel);
 
 	CCSprite* spriteOn = CCSprite::createWithSpriteFrameName("GJ_checkOn_001.png");
 	CCSprite* spriteOff = CCSprite::createWithSpriteFrameName("GJ_checkOff_001.png");
@@ -405,216 +386,60 @@ void LoadMacroLayer::updateSort(CCObject*) {
 	reloadList(0);
 }
 
-namespace {
-	CCSprite* createFavoriteSprite(bool active) {
-		CCSprite* sprite = CCSprite::createWithSpriteFrameName("GJ_starsIcon_001.png");
-		sprite->setColor(active ? ccc3(255, 220, 70) : ccc3(120, 120, 120));
-		sprite->setOpacity(active ? 255 : 170);
-		return sprite;
-	}
-}
-
-bool LoadMacroLayer::isFavorite(std::filesystem::path const& path) const {
-	std::istringstream favorites(Mod::get()->getSavedValue<std::string>(FAVORITE_MACROS_KEY));
-	std::string favorite;
-	std::string id = macroPathID(path);
-	while (std::getline(favorites, favorite)) {
-		if (favorite == id)
-			return true;
-	}
-	return false;
-}
-
-void LoadMacroLayer::setFavorite(std::filesystem::path const& path, bool favorite) {
-	std::istringstream saved(Mod::get()->getSavedValue<std::string>(FAVORITE_MACROS_KEY));
-	std::vector<std::string> favorites;
-	std::string entry;
-	std::string id = macroPathID(path);
-	while (std::getline(saved, entry)) {
-		if (!entry.empty() && entry != id)
-			favorites.push_back(entry);
-	}
-	if (favorite)
-		favorites.push_back(id);
-
-	std::string serialized;
-	for (auto const& value : favorites)
-		serialized += value + "\n";
-	Mod::get()->setSavedValue(FAVORITE_MACROS_KEY, serialized);
-}
-
-void LoadMacroLayer::updateFavoritesFilter(CCObject*) {
-	favoritesOnly = !favoritesToggle->isToggled();
-	reloadList(0);
-}
-
 void LoadMacroLayer::addList(bool refresh, float prevScroll) {
-	startBackgroundListLoad(refresh, prevScroll);
+	queuedRefresh = refresh;
+	queuedScroll = prevScroll;
+	showLoadingScreen();
+
+	if (listLoadQueued)
+		return;
+
+	listLoadQueued = true;
+	runAction(CCSequence::create(
+		CCDelayTime::create(0.f),
+		CCCallFunc::create(this, callfunc_selector(LoadMacroLayer::performQueuedListLoad)),
+		nullptr
+	));
 }
 
 void LoadMacroLayer::performQueuedListLoad() {
-	drainPendingListEntries();
+	listLoadQueued = false;
+	populateList(queuedRefresh, queuedScroll);
+	hideLoadingScreen();
 }
 
 void LoadMacroLayer::populateList(bool refresh, float prevScroll) {
-	rebuildListFromLoaded(refresh, prevScroll);
-}
+	cocos2d::CCSize winSize = cocos2d::CCDirector::sharedDirector()->getWinSize();
 
-void LoadMacroLayer::cancelBackgroundListLoad() {
-	if (listLoadCancel)
-		listLoadCancel->store(true);
-	listLoadCancel.reset();
-	listLoadInProgress = false;
+	std::filesystem::path path = Global::getFolderSettingPath(isAutosaves ? "autosaves_folder" : "macros_folder");
+	std::vector<std::filesystem::path> macros = file::readDirectory(path).unwrapOrDefault();
 
-	std::lock_guard<std::mutex> lock(listLoadMutex);
-	pendingMacroEntries.clear();
-}
+	CCArray* cells = CCArray::create();
 
-void LoadMacroLayer::clearListNodes() {
-	if (CCNode* scrollbar = m_buttonMenu->getChildByID("scrollbar"))
-		scrollbar->removeFromParentAndCleanup(true);
+	for (int i = invertSort ? macros.size() - 1 : 0; invertSort ? i >= 0 : i < macros.size(); invertSort ? --i : ++i) {
 
-	if (CCNode* lbl = menu->getChildByID("no-macros-label"))
-		lbl->removeFromParentAndCleanup(true);
+		if (macros[i].extension() != ".gdr" && macros[i].extension() != ".xd" && macros[i].extension() != ".json") continue;
 
-	if (CCNode* listLayer = m_buttonMenu->getChildByID("list-layer"))
-		listLayer->removeFromParentAndCleanup(true);
+		std::string name = macros[i].filename().string().substr(0, macros[i].filename().string().find_last_of('.'));
 
-	if (CCNode* bg = m_buttonMenu->getChildByID("background"))
-		bg->removeFromParentAndCleanup(true);
+		if (macros[i].extension() == ".json")
+			name = name.substr(0, name.find_last_of('.'));
 
-	macroScroll = nullptr;
-	macroScrollbar = nullptr;
-	macroListMenu = nullptr;
-}
+		if (Utils::toLower(name).find(search) == std::string::npos && search != "") continue;
 
-void LoadMacroLayer::startBackgroundListLoad(bool refresh, float prevScroll) {
-	cancelBackgroundListLoad();
-	clearListNodes();
+		std::time_t date;
 
-	queuedRefresh = refresh;
-	queuedScroll = prevScroll;
-	loadedMacroEntries.clear();
-	selectedMacros.clear();
-	allMacros.clear();
-	if (!isMerge && selectAllToggle)
-		selectAllToggle->toggle(false);
-
-	listLoadInProgress = true;
-	showLoadingScreen();
-	rebuildListFromLoaded(false, 0.f);
-
-	auto cancel = std::make_shared<std::atomic_bool>(false);
-	listLoadCancel = cancel;
-	int generation = ++listLoadGeneration;
-
-	std::filesystem::path folder = Global::getFolderSettingPath(isAutosaves ? "autosaves_folder" : "macros_folder");
-	std::string searchSnapshot = search;
-	bool favoritesOnlySnapshot = favoritesOnly;
-	bool invertSortSnapshot = invertSort;
-	std::string favoritesSnapshot = Mod::get()->getSavedValue<std::string>(FAVORITE_MACROS_KEY);
-
-	retain();
-	std::thread([this, cancel, generation, folder, searchSnapshot, favoritesOnlySnapshot, invertSortSnapshot, favoritesSnapshot] {
-		std::vector<std::filesystem::path> paths;
-		std::error_code ec;
-		std::filesystem::directory_iterator it(folder, ec);
-		std::filesystem::directory_iterator end;
-		while (!ec && it != end) {
-			if (cancel->load())
-				break;
-			auto const& entry = *it;
-			if (!entry.is_regular_file(ec))
-				ec.clear();
-			else
-				paths.push_back(entry.path());
-			it.increment(ec);
-		}
-
-		if (invertSortSnapshot)
-			std::reverse(paths.begin(), paths.end());
-
-		std::vector<MacroListEntry> batch;
-		batch.reserve(kMacroListBatchSize);
-
-		auto flushBatch = [&] {
-			if (batch.empty())
-				return;
-
-			{
-				std::lock_guard<std::mutex> lock(listLoadMutex);
-				pendingMacroEntries.insert(pendingMacroEntries.end(), batch.begin(), batch.end());
-			}
-			batch.clear();
-
-			Loader::get()->queueInMainThread([this, cancel, generation] {
-				if (listLoadCancel == cancel && listLoadGeneration == generation)
-					drainPendingListEntries();
-			});
-		};
-
-		for (auto const& macroPath : paths) {
-			if (cancel->load())
-				break;
-			if (!isMacroFile(macroPath))
-				continue;
-
-			std::string name = macroDisplayName(macroPath);
-			if (!searchSnapshot.empty() && Utils::toLower(name).find(searchSnapshot) == std::string::npos)
-				continue;
-			if (favoritesOnlySnapshot && !favoriteListContains(favoritesSnapshot, macroPath))
-				continue;
-
-			MacroListEntry info;
-			info.path = macroPath;
-			info.name = name;
 #ifdef GEODE_IS_WINDOWS
-			info.date = Utils::getFileCreationTime(macroPath);
+		date = Utils::getFileCreationTime(macros[i]);
 #endif
-			batch.push_back(std::move(info));
 
-			if (batch.size() >= kMacroListBatchSize)
-				flushBatch();
-		}
-
-		flushBatch();
-
-		Loader::get()->queueInMainThread([this, cancel, generation] {
-			if (listLoadCancel == cancel && listLoadGeneration == generation)
-				finishBackgroundListLoad();
-			release();
-		});
-	}).detach();
-}
-
-void LoadMacroLayer::drainPendingListEntries() {
-	if (!listLoadCancel)
-		return;
-
-	std::vector<MacroListEntry> batch;
-	{
-		std::lock_guard<std::mutex> lock(listLoadMutex);
-		batch.swap(pendingMacroEntries);
+		MacroCell* cell = MacroCell::create(macros[i], name, date, menuLayer, mergeLayer, static_cast<CCLayer*>(this));
+		cells->addObject(cell);
 	}
 
-	if (batch.empty())
-		return;
+	macroCountLbl->setString(fmt::format("{} Macros", std::to_string(cells->count())).c_str());
 
-	loadedMacroEntries.insert(
-		loadedMacroEntries.end(),
-		std::make_move_iterator(batch.begin()),
-		std::make_move_iterator(batch.end())
-	);
-	appendLoadedListEntries();
-}
-
-void LoadMacroLayer::finishBackgroundListLoad() {
-	drainPendingListEntries();
-	listLoadInProgress = false;
-	hideLoadingScreen();
-	updateDynamicListLayout(queuedScroll, queuedRefresh);
-	if (loadedMacroEntries.empty()) {
-		cocos2d::CCSize winSize = cocos2d::CCDirector::sharedDirector()->getWinSize();
+	if (cells->count() == 0) {
 		CCLabelBMFont* lbl = CCLabelBMFont::create(isAutosaves ? "No Autosaves" : "No Macros", "bigFont.fnt");
 		lbl->setPosition(winSize / 2);
 		lbl->setScale(0.5f);
@@ -622,127 +447,99 @@ void LoadMacroLayer::finishBackgroundListLoad() {
 		lbl->setID("no-macros-label");
 		menu->addChild(lbl);
 	}
-}
 
-void LoadMacroLayer::onExit() {
-	cancelBackgroundListLoad();
-	xdb::Popup<geode::Popup*, geode::Popup*, bool>::onExit();
-}
+	ListView* listView = ListView::create(cells, 35, 323, 180);
+	CCNode* contentLayer = static_cast<CCNode*>(listView->m_tableView->getChildren()->objectAtIndex(0));
 
-void LoadMacroLayer::rebuildListFromLoaded(bool refresh, float prevScroll) {
-	cocos2d::CCSize winSize = cocos2d::CCDirector::sharedDirector()->getWinSize();
-
-	clearListNodes();
-	allMacros.clear();
-	selectedMacros.clear();
+	if (refresh)
+		contentLayer->setPositionY(prevScroll);
 
 	cocos2d::ccColor3B color = Mod::get()->getSettingValue<cocos2d::ccColor3B>("background_color");
 
-	CCNode* listLayer = CCNode::create();
-	listLayer->setContentSize({ kMacroListWidth, kMacroListHeight });
-	listLayer->setPosition((winSize / 2) - (listLayer->getContentSize() / 2) + ccp(0, 1));
+	int it = 0;
+
+	cocos2d::ccColor3B color1 = ccc3(std::max(0, color.r - 70), std::max(0, color.g - 70), std::max(0, color.b - 70));
+	cocos2d::ccColor3B color2 = ccc3(std::max(0, color.r - 55), std::max(0, color.g - 55), std::max(0, color.b - 55));
+
+	for (CCNode* child : contentLayer->getChildrenExt()) {
+		if (GenericListCell* cell = typeinfo_cast<GenericListCell*>(child)) {
+			allMacros.push_back(static_cast<MacroCell*>(cell->getChildren()->objectAtIndex(2)));
+
+			cocos2d::ccColor3B col = (it % 2 == 0) ? color1 : color2;
+			it++;
+			cell->m_backgroundLayer->setColor(col);
+		}
+	}
+
+	GJCommentListLayer* listLayer = GJCommentListLayer::create(listView, "Custom Labels", ccc4(255, 255, 255, 0), 323, 180, true);
+	listLayer->setPosition((winSize / 2) - (listLayer->getContentSize() / 2) - CCPoint((it >= 5) ? 6 : 0, 0) + ccp(0, 1));
 	listLayer->setZOrder(1);
 	listLayer->setID("list-layer");
+	listView->setPositionY(-12);
 	m_buttonMenu->addChild(listLayer);
 
-	macroScroll = geode::ScrollLayer::create({ kMacroListWidth, kMacroListHeight });
-	macroScroll->setPosition({ 0.f, 0.f });
-	macroScroll->setTouchEnabled(true);
-	macroScroll->enableScrollWheel(true);
-	listLayer->addChild(macroScroll);
+	listLayer->setUserObject("dont-correct-borders", cocos2d::CCBool::create(true));
 
-	macroListMenu = CCMenu::create();
-	macroListMenu->setPosition({ 0.f, 0.f });
-	macroListMenu->setAnchorPoint({ 0.f, 0.f });
-	macroListMenu->setContentSize({ kMacroListWidth, kMacroListHeight });
-	macroListMenu->setTouchPriority(menu ? menu->getTouchPriority() - 1 : -129);
-	macroScroll->m_contentLayer->addChild(macroListMenu);
+	CCSprite* topBorder = listLayer->getChildByType<CCSprite>(1);
+	CCSprite* bottomBorder = listLayer->getChildByType<CCSprite>(0);
+	CCSprite* rightBorder = listLayer->getChildByType<CCSprite>(3);
+	CCSprite* leftBorder = listLayer->getChildByType<CCSprite>(2);
 
-	CCScale9Sprite* listBackground = CCScale9Sprite::create(WINDOW_BG, { 0, 0, 80, 80 });
+	if (color != ccc3(51, 68, 153)) {
+		CCSprite* topSprite = CCSprite::create("GJ_commentTop2_001_White.png"_spr);
+		CCSprite* bottomSprite = CCSprite::create("GJ_commentTop2_001_White.png"_spr);
+		CCSprite* rightSprite = CCSprite::create("GJ_commentSide2_001_White.png"_spr);
+		CCSprite* leftSprite = CCSprite::create("GJ_commentSide2_001_White.png"_spr);
+		rightSprite->setScaleX(-1);
+		bottomSprite->setScaleY(-1);
+
+		topSprite->setColor(color);
+		bottomSprite->setColor(color);
+		rightSprite->setColor(color);
+		leftSprite->setColor(color);
+
+		topSprite->setAnchorPoint({ 0, 0 });
+		bottomSprite->setAnchorPoint({ 0, 1 });
+		rightSprite->setAnchorPoint({ 1, 0 });
+		leftSprite->setAnchorPoint({ 0, 0 });
+
+		topBorder->addChild(topSprite);
+		bottomBorder->addChild(bottomSprite);
+		rightBorder->addChild(rightSprite);
+		leftBorder->addChild(leftSprite);
+	}
+
+	topBorder->setScaleX(0.945f);
+	topBorder->setScaleY(1.f);
+	topBorder->setPosition(ccp(161.25, 162.f));
+
+	bottomBorder->setScaleX(0.945f);
+	bottomBorder->setScaleY(1.f);
+	bottomBorder->setPosition({ 161.25, -7.f });
+
+	rightBorder->setScaleX(0.8f);
+	rightBorder->setScaleY(5.9f);
+	rightBorder->setPosition({ 328, -12 });
+
+	leftBorder->setScaleX(0.8f);
+	leftBorder->setScaleY(5.6f);
+	leftBorder->setPosition({ -5.45, -1 });
+
+	CCScale9Sprite* listBackground = CCScale9Sprite::create("square02b_001.png", { 0, 0, 80, 80 });
 	listBackground->setScale(0.7f);
 	listBackground->setColor({ 0,0,0 });
 	listBackground->setOpacity(75);
-	listBackground->setPosition(winSize / 2 + ccp(-0.11f, -10.5f));
+	listBackground->setPosition(winSize / 2 + ccp(-0.11f - (it >= 5 ? 6 : 0), -10.5f));
 	listBackground->setContentSize({ 461.1f, 255.1f });
 	listBackground->setID("background");
 	m_buttonMenu->addChild(listBackground);
 
-	macroScrollbar = Scrollbar::create(macroScroll);
-	macroScrollbar->setPosition({ (winSize.width / 2) + (listLayer->getScaledContentSize().width / 2) + 4, winSize.height / 2 });
-	macroScrollbar->setID("scrollbar");
-	m_buttonMenu->addChild(macroScrollbar);
-
-	appendLoadedListEntries();
-	updateDynamicListLayout(prevScroll, refresh);
-}
-
-void LoadMacroLayer::appendLoadedListEntries() {
-	if (!macroScroll || !macroListMenu)
-		rebuildListFromLoaded(queuedRefresh, queuedScroll);
-	if (!macroScroll || !macroListMenu)
-		return;
-
-	bool selectAllWasOn = !isMerge && selectAllToggle && selectAllToggle->isToggled();
-	cocos2d::ccColor3B color = Mod::get()->getSettingValue<cocos2d::ccColor3B>("background_color");
-	cocos2d::ccColor3B color1 = ccc3(std::max(0, color.r - 70), std::max(0, color.g - 70), std::max(0, color.b - 70));
-	cocos2d::ccColor3B color2 = ccc3(std::max(0, color.r - 55), std::max(0, color.g - 55), std::max(0, color.b - 55));
-
-	while (allMacros.size() < loadedMacroEntries.size()) {
-		size_t index = allMacros.size();
-		auto const& macro = loadedMacroEntries[index];
-
-		CCLayerColor* rowBg = CCLayerColor::create(ccc4(0, 0, 0, 95), kMacroListWidth, kMacroRowHeight);
-		rowBg->setColor((index % 2 == 0) ? color1 : color2);
-		rowBg->setAnchorPoint({ 0.f, 0.f });
-		rowBg->setID(fmt::format("macro-row-bg-{}", index).c_str());
-		macroListMenu->addChild(rowBg, -1);
-
-		MacroCell* cell = MacroCell::create(macro.path, macro.name, macro.date, menuLayer, mergeLayer, static_cast<CCLayer*>(this));
-		cell->setContentSize({ kMacroListWidth, kMacroRowHeight });
-		cell->setAnchorPoint({ 0.f, 0.f });
-		cell->setID(fmt::format("macro-cell-{}", index).c_str());
-		macroListMenu->addChild(cell);
-
-		if (!isMerge && selectAllWasOn) {
-			cell->toggler->toggle(true);
-			selectedMacros.push_back(cell);
-		}
-
-		allMacros.push_back(cell);
+	if (it >= 5) {
+		Scrollbar* scrollbar = Scrollbar::create(listView->m_tableView);
+		scrollbar->setPosition({ (winSize.width / 2) + (listLayer->getScaledContentSize().width / 2) + 4, winSize.height / 2 });
+		scrollbar->setID("scrollbar");
+		m_buttonMenu->addChild(scrollbar);
 	}
-
-	updateDynamicListLayout(queuedScroll, queuedRefresh);
-}
-
-void LoadMacroLayer::updateDynamicListLayout(float prevScroll, bool restoreScroll) {
-	if (!macroScroll || !macroScroll->m_contentLayer || !macroListMenu)
-		return;
-
-	float viewHeight = macroScroll->getContentSize().height;
-	float previousContentHeight = macroScroll->m_contentLayer->getContentSize().height;
-	float previousScroll = macroScroll->m_contentLayer->getPositionY();
-	float contentHeight = std::max(viewHeight, kMacroRowHeight * static_cast<float>(allMacros.size()));
-	macroScroll->m_contentLayer->setAnchorPoint({ 0.f, 0.f });
-	macroScroll->m_contentLayer->setContentSize({ kMacroListWidth, contentHeight });
-	macroListMenu->setContentSize({ kMacroListWidth, contentHeight });
-
-	if (macroCountLbl)
-		macroCountLbl->setString(fmt::format("{} Macros", allMacros.size()).c_str());
-
-	for (size_t i = 0; i < allMacros.size(); i++) {
-		float y = contentHeight - kMacroRowHeight * static_cast<float>(i + 1);
-		allMacros[i]->setPosition({ 0.f, y });
-		if (auto* rowBg = typeinfo_cast<CCLayerColor*>(macroListMenu->getChildByID(fmt::format("macro-row-bg-{}", i).c_str())))
-			rowBg->setPosition({ 0.f, y });
-	}
-
-	if (macroScrollbar)
-		macroScrollbar->setVisible(contentHeight > viewHeight + 1.f);
-
-	if (restoreScroll)
-		macroScroll->m_contentLayer->setPositionY(prevScroll);
-	else if (previousContentHeight > 0.f)
-		macroScroll->m_contentLayer->setPositionY(previousScroll - (contentHeight - previousContentHeight));
 }
 
 MacroCell* MacroCell::create(std::filesystem::path path, std::string name, std::time_t date, geode::Popup* menuLayer, geode::Popup* mergeLayer, CCLayer* loadLayer) {
@@ -790,7 +587,7 @@ bool MacroCell::init(std::filesystem::path path, std::string name, std::time_t d
 	addChild(menu);
 
 	CCLabelBMFont* lbl = CCLabelBMFont::create(this->name.c_str(), "chatFont.fnt");
-	lbl->limitLabelWidth(isMerge ? 194.f : 174.f, 0.8f, 0.01f);
+	lbl->limitLabelWidth(194.f, 0.8f, 0.01f);
 	lbl->setAnchorPoint({ 0, 0.5 });
 	lbl->updateLabel();
 	addChild(lbl);
@@ -845,21 +642,6 @@ bool MacroCell::init(std::filesystem::path path, std::string name, std::time_t d
 
 	if (!isMerge)
 		menu->addChild(toggler);
-
-	if (!isMerge) {
-		LoadMacroLayer* layer = static_cast<LoadMacroLayer*>(loadLayer);
-		favoriteToggle = CCMenuItemToggler::create(
-			createFavoriteSprite(false),
-			createFavoriteSprite(true),
-			this,
-			menu_selector(MacroCell::onFavorite)
-		);
-		favoriteToggle->setScale(0.42f);
-		favoriteToggle->setPosition({ 196, 17.5f });
-		favoriteToggle->setID("favorite-toggle");
-		favoriteToggle->toggle(layer->isFavorite(path));
-		menu->addChild(favoriteToggle);
-	}
 
 	return true;
 }
@@ -954,7 +736,8 @@ void MacroCell::handleLoad() {
 	}
 
 	g.macro = newMacro;
-	Macro::preparePlayback();
+	g.currentAction = 0;
+	g.currentFrameFix = 0;
 	g.restart = true;
 	g.macro.canChangeFPS = false;
 
@@ -1033,7 +816,6 @@ void MacroCell::deleteMacro(bool reload) {
 		return FLAlertLayer::create("Error", "There was an error deleting this macro. ID: 7", "Ok")->show();
 	}
 	else {
-		static_cast<LoadMacroLayer*>(loadLayer)->setFavorite(path, false);
 		if (reload) {
 			static_cast<LoadMacroLayer*>(loadLayer)->reloadList();
 			Notification::create("Macro Deleted", NotificationIcon::Success)->show();
@@ -1044,16 +826,6 @@ void MacroCell::deleteMacro(bool reload) {
 
 void MacroCell::onSelect(CCObject*) {
 	selectMacro(true);
-}
-
-void MacroCell::onFavorite(CCObject*) {
-	LoadMacroLayer* layer = static_cast<LoadMacroLayer*>(loadLayer);
-	bool favorite = !favoriteToggle->isToggled();
-	layer->setFavorite(path, favorite);
-
-	// Removing a favorite while the filter is active should remove it from the list.
-	if (!favorite && layer->favoritesOnly)
-		layer->reloadList(0);
 }
 
 void MacroCell::selectMacro(bool single) {

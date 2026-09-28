@@ -2,18 +2,9 @@
 
 #include "../includes.hpp"
 #include "record_layer.hpp"
-#include <atomic>
-#include <iterator>
 #include <locale>
-#include <memory>
 #include <string>
 #include <ctime>
-
-struct MacroListEntry {
-        std::filesystem::path path;
-        std::string name;
-        std::time_t date = 0;
-};
 
 class MacroCell : public CCNode {
 	std::string name;
@@ -30,7 +21,6 @@ public:
 
 	CCMenu* menu = nullptr;
 	CCMenuItemToggler* toggler = nullptr;
-	CCMenuItemToggler* favoriteToggle = nullptr;
 
 	static MacroCell* create(std::filesystem::path path, std::string name, std::time_t date, geode::Popup* menuLayer, geode::Popup* mergeLayer, CCLayer* loadLayer);
 
@@ -44,13 +34,9 @@ public:
 
 	void deleteMacro(bool reload);
 
-        void onSelect(CCObject*);
-        void onFavorite(CCObject*);
+	void onSelect(CCObject*);
 
-        void selectMacro(bool single);
-        std::filesystem::path const& getPath() const {
-                return path;
-        }
+	void selectMacro(bool single);
 };
 
 class LoadMacroLayer : public xdb::Popup<geode::Popup*, geode::Popup*, bool>, public TextInputDelegate {
@@ -62,7 +48,6 @@ public:
 
 	CCMenuItemToggler* selectAllToggle = nullptr;
 	CCMenuItemToggler* sortToggle = nullptr;
-	CCMenuItemToggler* favoritesToggle = nullptr;
 
 	CCMenuItemToggler* p1Toggle = nullptr;
 	CCMenuItemToggler* p2Toggle = nullptr;
@@ -74,9 +59,6 @@ public:
 	CCLabelBMFont* loadingLabel = nullptr;
 
 	CCLabelBMFont* macroCountLbl = nullptr;
-	geode::ScrollLayer* macroScroll = nullptr;
-	geode::Scrollbar* macroScrollbar = nullptr;
-	CCMenu* macroListMenu = nullptr;
 
 	std::vector<MacroCell*> selectedMacros;
 	std::vector<MacroCell*> allMacros;
@@ -85,16 +67,9 @@ public:
 	bool isAutosaves = false;
 	bool isMerge = false;
 	bool invertSort = false;
-	bool favoritesOnly = false;
-        bool queuedRefresh = false;
-        bool listLoadInProgress = false;
-        float queuedScroll = 0.f;
-        int listLoadGeneration = 0;
-
-        std::shared_ptr<std::atomic_bool> listLoadCancel;
-        std::mutex listLoadMutex;
-        std::vector<MacroListEntry> pendingMacroEntries;
-        std::vector<MacroListEntry> loadedMacroEntries;
+	bool queuedRefresh = false;
+	bool listLoadQueued = false;
+	float queuedScroll = 0.f;
 
 	static LoadMacroLayer* create(geode::Popup* layer, geode::Popup* layer2, bool autosaves);
 
@@ -110,20 +85,11 @@ public:
 
 	void clearSearch(CCObject*);
 
-        void addList(bool refresh = false, float prevScroll = 0.f);
-        void populateList(bool refresh = false, float prevScroll = 0.f);
-        void performQueuedListLoad();
-        void startBackgroundListLoad(bool refresh = false, float prevScroll = 0.f);
-        void drainPendingListEntries();
-        void finishBackgroundListLoad();
-        void cancelBackgroundListLoad();
-        void clearListNodes();
-        void rebuildListFromLoaded(bool refresh = false, float prevScroll = 0.f);
-        void appendLoadedListEntries();
-        void updateDynamicListLayout(float prevScroll = 0.f, bool restoreScroll = false);
-        void showLoadingScreen();
-        void hideLoadingScreen();
-        void onExit() override;
+	void addList(bool refresh = false, float prevScroll = 0.f);
+	void populateList(bool refresh = false, float prevScroll = 0.f);
+	void performQueuedListLoad();
+	void showLoadingScreen();
+	void hideLoadingScreen();
 
 	void reloadList(int amount = 1);
 
@@ -134,8 +100,4 @@ public:
 	void onImportMacro(CCObject*);
 
 	void updateSort(CCObject*);
-	void updateFavoritesFilter(CCObject*);
-
-	bool isFavorite(std::filesystem::path const& path) const;
-	void setFavorite(std::filesystem::path const& path, bool favorite);
 };

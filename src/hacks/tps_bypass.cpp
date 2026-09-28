@@ -1,29 +1,24 @@
 #include "../includes.hpp"
 #include <Geode/modify/GJBaseGameLayer.hpp>
 
-namespace {
-    // Leave part of a 60 Hz frame for rendering, audio, and the rest of the
-    // scheduler. Spending the entire 16.67 ms interval in playback's catch-up
-    // loop makes an otherwise 60 FPS frame miss v-sync and present at 30 FPS.
-    constexpr auto kPlaybackStepBudget = std::chrono::duration<double, std::milli>(6.0);
-    constexpr int kMaxCatchupStepsPerFrame = 12;
-}
-
 class $modify(GJBaseGameLayer) {
 
     void update(float dt) {
         auto& g = Global::get();
 
-        // Run the multi-step physics loop only for explicit fixed-step modes.
-        // Plain macro playback uses the game's normal update path so decorated
-        // levels do not pay several full physics/object passes per rendered frame.
+        // Run the multi-step physics loop when:
+        //   1. Custom TPS bypass is enabled (non-240 TPS), OR
+        //   2. Lock Delta is enabled while playing/recording (ensures one physics step
+        //      per 1/TPS slice, which is required for correct macro playback physics
+        //      even at the default 240 TPS when the render framerate is lower), OR
+        //   3. A macro is actively being played back (ensures the fixed step loop runs
+        //      regardless of user TPS/lockDelta settings, so playback speed is
+        //      identical in normal play and in editor test mode).
         bool shouldBypass = (g.tpsEnabled && Global::getTPS() != 240.f) ||
-                            (g.lockDelta && g.state != state::none);
+                            (g.lockDelta && g.state != state::none) ||
+                            g.state == state::playing;
 
-        if (!shouldBypass) {
-            g.leftOver = 0.0;
-            return GJBaseGameLayer::update(dt);
-        }
+        if (!shouldBypass) return GJBaseGameLayer::update(dt);
         // Only apply the bypass for the active PlayLayer.  During editor
         // playtesting, both PlayLayer and LevelEditorLayer derive from
         // GJBaseGameLayer and may both receive update() calls.  Letting the
@@ -33,29 +28,18 @@ class $modify(GJBaseGameLayer) {
         if (!pl || pl != typeinfo_cast<PlayLayer*>(this))
             return GJBaseGameLayer::update(dt);
         
-        const double newDt = 1.0 / static_cast<double>(Global::getTPS());
+        float newDt = 1.f / Global::getTPS();
 
-        double realDt = static_cast<double>(dt) + g.leftOver;
-        double maxFrameDt = newDt * static_cast<double>(kMaxCatchupStepsPerFrame);
-        if (realDt > maxFrameDt)
-            realDt = maxFrameDt;
+        if (g.frameStepper) return GJBaseGameLayer::update(newDt);
 
-        const auto deadline = std::chrono::steady_clock::now() + kPlaybackStepBudget;
-        // Account for representation error at exact tick boundaries. Without
-        // this, identical deltas can produce a different step count depending
-        // on the platform's floating-point implementation.
-        constexpr double tickBoundaryEpsilon = 1e-6;
-        int mult = static_cast<int>(std::floor((realDt / newDt) + tickBoundaryEpsilon));
-        if (mult > kMaxCatchupStepsPerFrame)
-            mult = kMaxCatchupStepsPerFrame;
+        float realDt = dt + g.leftOver;
+
+        auto startTime = std::chrono::high_resolution_clock::now();
+        int mult = static_cast<int>(realDt / newDt);
 
         for (int i = 0; i < mult; ++i) {
-            GJBaseGameLayer::update(static_cast<float>(newDt));
-            // Always complete at least one tick. Afterwards, yield before the
-            // playback loop consumes the whole display frame. Unprocessed
-            // ticks remain in leftOver, so inputs and frame fixes are applied
-            // on their original simulation frames rather than being dropped.
-            if (i + 1 < mult && std::chrono::steady_clock::now() >= deadline) {
+            GJBaseGameLayer::update(newDt);
+            if (std::chrono::high_resolution_clock::now() - startTime > std::chrono::duration<double, std::milli>(16.666f)) {
                 mult = i + 1;
                 break;
             }
@@ -64,17 +48,15 @@ class $modify(GJBaseGameLayer) {
         // Keep the fractional remainder for the next frame.  Using
         // realDt (not just dt) as the base ensures the leftOver stays
         // in [0, newDt) and never grows unboundedly.
-        g.leftOver = realDt - newDt * static_cast<double>(mult);
-        // Do not carry a tiny negative value created by the boundary epsilon.
-        if (g.leftOver < 0.0 && g.leftOver > -(newDt * tickBoundaryEpsilon))
-            g.leftOver = 0.0;
+        g.leftOver = realDt - newDt * mult;
         
     }
 
     float getModifiedDelta(float dt) {
         auto& g = Global::get();
         bool shouldBypass = (g.tpsEnabled && Global::getTPS() != 240.f) ||
-                            (g.lockDelta && g.state != state::none);
+                            (g.lockDelta && g.state != state::none) ||
+                            g.state == state::playing;
         if (!shouldBypass) return GJBaseGameLayer::getModifiedDelta(dt);
         PlayLayer* pl = PlayLayer::get();
         if (!pl || pl != typeinfo_cast<PlayLayer*>(this))

@@ -18,9 +18,6 @@ test.cpp
 # Precompiled Headers
 *.gch
 *.pch
-*.log
-build*/
-.*/
 
 # Compiled Dynamic libraries
 *.so

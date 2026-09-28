@@ -3,19 +3,15 @@
 
 #include <Geode/modify/GJBaseGameLayer.hpp>
 
-void Clickbot::ensureInitialized() {
+$execute { 
     auto & g = Global::get();
-    if (!g.mod)
-        return;
 
-    if (!g.mod->hasSavedValue("clickbot_defaults5")) {
-        g.mod->setSavedValue("clickbot_defaults5", true);
+    if (!g.mod->setSavedValue("clickbot_defaults5", true)) {
         g.mod->setSavedValue("clickbot_holding_only", true);
         g.mod->setSavedValue("clickbot_playing_only", false);
     }
 
-    if (!g.mod->hasSavedValue("clickbot_defaults4")) {
-        g.mod->setSavedValue("clickbot_defaults4", true);
+    if (!g.mod->setSavedValue("clickbot_defaults4", true)) {
         std::filesystem::path dir = g.mod->getResourcesDir();
         ClickSetting setts;
 
@@ -32,13 +28,15 @@ void Clickbot::ensureInitialized() {
     g.clickbotEnabled = g.mod->getSavedValue<bool>("clickbot_enabled");
     g.clickbotOnlyPlaying = g.mod->getSavedValue<bool>("clickbot_playing_only");
     g.clickbotOnlyHolding = g.mod->getSavedValue<bool>("clickbot_holding_only");
-}
+
+    Clickbot::updateSounds();
+
+};
 
 class $modify(GJBaseGameLayer) {
     
     void handleButton(bool hold, int button, bool player2) {
         GJBaseGameLayer::handleButton(hold, button, player2);
-        Clickbot::ensureInitialized();
         auto& g = Global::get();
 
         if (!g.clickbotEnabled) return;
@@ -93,7 +91,6 @@ void Clickbot::setSound(std::string id, FMOD::Sound* sound) {
 }
 
 void Clickbot::playSound(std::string id) {
-    ensureInitialized();
     auto& c = get();
     if (!c.system) return updateSounds();
 
@@ -118,13 +115,12 @@ void Clickbot::playSound(std::string id) {
     result = c.channel->setVolume((settings.volume / 100.f) * (masterVol / 100.f));
     if (result != FMOD_OK) return log::debug("Click sound errored. ID: 3");
 
-    float totalPitch = settings.pitch * g.mod->getSavedValue<float>("clickbot_pitch");
+    float totalPitch = g.currentPitch * settings.pitch * g.mod->getSavedValue<float>("clickbot_pitch");
     result = c.channel->setPitch(totalPitch);
     if (result != FMOD_OK) return log::debug("Click sound errored. ID: 4");
 }
 
 void Clickbot::updateSounds() {
-    ensureInitialized();
     auto& c = get();
     FMOD_RESULT result;
 

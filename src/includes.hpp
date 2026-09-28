@@ -9,46 +9,16 @@
 #include <queue>
 #include <cmath>
 #include <cctype>
-#include <algorithm>
 #include <vector>
 #include <utility>
 #include <filesystem>
-#include <deque>
 #include <limits>
 #include <charconv>
-#include <cstdint>
 
+#include "renderer/renderer.hpp"
 #include "macro.hpp"
 
 using namespace geode::prelude;
-
-#define WINDOW_BG "GJ_square01.png"
-
-inline void detachInputNodeSafe(CCTextInputNode* input) {
-    if (!input) return;
-
-    input->detachWithIME();
-    input->onClickTrackNode(false);
-    if (input->m_cursor)
-        input->m_cursor->setVisible(false);
-}
-
-inline void detachActiveInputsRecursive(CCNode* root) {
-    if (!root) return;
-
-    if (auto* input = typeinfo_cast<CCTextInputNode*>(root))
-        detachInputNodeSafe(input);
-
-    if (auto* input = typeinfo_cast<TextInput*>(root))
-        detachInputNodeSafe(input->getInputNode());
-
-    if (CCArray* children = root->getChildren()) {
-        for (int i = 0; i < children->count(); ++i) {
-            if (auto* child = typeinfo_cast<CCNode*>(children->objectAtIndex(i)))
-                detachActiveInputsRecursive(child);
-        }
-    }
-}
 
 namespace xdb {
 template <class... SetupArgs>
@@ -56,22 +26,7 @@ class Popup : public geode::Popup {
 protected:
     virtual bool setup(SetupArgs... args) = 0;
 
-    void adjustForLoadingScreen(bool includeTitle = true) {
-        cocos2d::CCPoint offset = (cocos2d::CCDirector::sharedDirector()->getWinSize() - m_mainLayer->getContentSize()) / 2;
-        m_mainLayer->setPosition(m_mainLayer->getPosition() - offset);
-        m_closeBtn->setPosition(m_closeBtn->getPosition() + offset);
-        m_bgSprite->setPosition(m_bgSprite->getPosition() + offset);
-
-        if (includeTitle && m_title)
-            m_title->setPosition(m_title->getPosition() + offset);
-    }
-
 public:
-    void onExit() override {
-        detachActiveInputsRecursive(this);
-        geode::Popup::onExit();
-    }
-
     bool initAnchored(
         float width,
         float height,
@@ -151,17 +106,39 @@ public:
 
     static void updateKeybinds();
 
+    static void updateSeed(bool isRestart = false);
 
+    static void updatePitch(float value);
 
+    static void toggleSpeedhack();
 
+    static void frameStep();
+
+    static void toggleFrameStepper();
+
+    static void frameStepperOn();
+
+    static void frameStepperOff();
 
     static PauseLayer* getPauseLayer();
     static std::filesystem::path getFolderSettingPath(std::string const& settingID, bool createIfMissing = true);
+    static void triggerFramePerfectOverlay(int button, bool down);
+    static void triggerFramePerfectOverlayProgress(int button, bool down, std::string const& typeName, int leftWiggle, int rightWiggle);
+    static void triggerFramePerfectExpected(int leftWiggle, int rightWiggle);
+    static void triggerFramePerfectOverlayCounted(size_t actionIndex, int button, bool down, std::string const& typeName, int leftWiggle, int rightWiggle);
+    static void refreshFramePerfectOverlayText();
+    static void resetFramePerfectStats();
+    static bool isDeveloperModeEnabled();
+    static void setDeveloperModeEnabled(bool enabled);
+    static std::string getFramePerfectOverlayMode();
+    static bool isFramePerfectDetectionEnabled();
+    static bool isPathfinderFeatureEnabled();
 
     Mod* mod = Mod::get();
     geode::Popup* layer = nullptr;
 
     Macro macro;
+    Renderer renderer;
     state state = none;
 
     std::unordered_map<CheckpointObject*, CheckpointData> checkpoints;
@@ -171,31 +148,56 @@ public:
 
     int lastAutoSaveFrame = 0;
     std::chrono::time_point<std::chrono::steady_clock> lastAutoSaveMS = std::chrono::steady_clock::now();
-    std::int64_t currentSession = 0;
+    int currentSession = 0;
 
+    bool stepFrame = false;
+    bool stepFrameDraw = false;
+    int stepFrameDrawMultiple = 0;
+    int stepFrameParticle = 0;
+    int frameStepperMusicTime = 0;
 
     bool cancelCheckpoint = false;
     bool ignoreRecordAction = false;
     bool restart = false;
     bool restartLater = false;
+    bool creatingTrajectory = false;
     bool firstAttempt = false;
     bool macroUsedInAttempt = false;
-    bool botUsedInLevelSession = false;
 
+    bool disableShaders = false;
+    bool safeMode = false;
+    bool layoutMode = false;
+    bool showTrajectory = false;
+    bool coinFinder = false;
+    bool frameStepper = false;
+    bool speedhackEnabled = false;
+    bool speedhackAudio = false;
+    bool seedEnabled = false;
     bool clickbotEnabled = false;
     bool clickbotOnlyPlaying = false;
     bool clickbotOnlyHolding = false;
     bool frameLabel = false;
+    bool trajectoryBothSides = false;
+    bool p2mirror = false;
     bool lockDelta = false;
     bool stopPlaying = false;
+    bool pathfinderMode = false;
+    bool pathfinderSearching = false;
     bool tpsEnabled = false;
     float tps = 240.f;
     bool previousTpsEnabled = false;
     float previousTps = 0.f;
-    bool autosaveEnabled = true;
-    bool autosaveIntervalEnabled = true;
-    int autosaveInterval = 600;
+    bool autoclicker = false;
+    bool autoclickerP1 = false;
+    bool autoclickerP2 = false;
+    int holdFor = 0;
+    int releaseFor = 0;
+    int holdFor2 = 0;
+    int releaseFor2 = 0;
+    bool autosaveIntervalEnabled = false;
+    int autosaveInterval = 600000;
     float autosaveCheck = 2.f;
+    bool autosaveEnabled = false;
 
     bool ignoreStopDashing[2] = { false, false };
     bool addSideHoldingMembers[2] = { false, false };
@@ -221,7 +223,27 @@ public:
     bool buildExpiryNoticeShown = false;
 
     int currentPage = 0;
-    // Keep the fixed-step accumulator in double precision. A float accumulator
-    // can round a nominal 4-step 60 Hz update down to 3 steps on some targets.
-    double leftOver = 0.0;
+    float currentPitch = 1.f;
+    std::string cachedMacroSeedString = "";
+    uintptr_t cachedMacroSeedValue = 1;
+    uintptr_t latestSeed = 0;
+    float leftOver = 0.f;
+    int framePerfectOverlayFrames = 0;
+    std::string framePerfectOverlayText = "";
+    int framePerfectCount = 0;
+    int framePerfectCount60 = 0;
+    int framePerfectCount144 = 0;
+    int framePerfectCount240 = 0;
+    int framePerfectExpected = 0;
+    int framePerfectExpected60 = 0;
+    int framePerfectExpected144 = 0;
+    int framePerfectExpected240 = 0;
+    std::string framePerfectOverlayTypeName = "";
+    std::string framePerfectOverlayFpsType = "";
+    int framePerfectOverlayLeftWiggle = 0;
+    int framePerfectOverlayRightWiggle = 0;
+    bool framePerfectOverlayScanning = false;
+    bool framePerfectSfxEnabled = true;
+    size_t lastFramePerfectAction = std::numeric_limits<size_t>::max();
+    std::string pathfinderStatus = "Idle";
 };

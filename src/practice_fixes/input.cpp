@@ -29,7 +29,7 @@ void InputPracticeFixes::eraseActions(int frame) {
 	auto& inputs = g.macro.inputs;
 
 	if (!inputs.empty()) {
-		while (!inputs.empty() && inputs.back().frame >= frame)
+		while (inputs.back().frame >= frame && !inputs.empty())
         	inputs.pop_back();
 	}
 
@@ -37,7 +37,7 @@ void InputPracticeFixes::eraseActions(int frame) {
 
 	if (frameFixes.empty()) return;
 
-	while (!frameFixes.empty() && frameFixes.back().frame >= frame)
+	while (frameFixes.back().frame >= frame && !frameFixes.empty())
         frameFixes.pop_back();
 }
 
