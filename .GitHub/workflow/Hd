@@ -1,0 +1,35 @@
+name: Rollback main
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  rollback:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: main
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Verify rollback commit exists
+        run: |
+          git cat-file -e fce7d07^{commit}
+
+      - name: Reset main to fce7d07
+        run: |
+          git reset --hard fce7d07
+
+      - name: Force push rollback
+        run: |
+          git push origin main --force-with-lease
