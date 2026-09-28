@@ -89,6 +89,27 @@ if (MSVC)
     endif()
 endif()
 
+if (WIN32)
+    # Some Windows SDK snapshots declare CCFileUtilsWin32::init() twice, once
+    # with virtual and once without. Clang rejects the redeclaration while MSVC
+    # accepts it, so normalize the header before Geode builds its bindings.
+    set(_geode_ccfileutils_win32_h "$ENV{GEODE_SDK}/loader/include/Geode/cocos/platform/win32/CCFileUtilsWin32.h")
+    if (EXISTS "${_geode_ccfileutils_win32_h}")
+        file(READ "${_geode_ccfileutils_win32_h}" _geode_ccfileutils_win32_content)
+        set(_geode_ccfileutils_win32_original "${_geode_ccfileutils_win32_content}")
+        string(REPLACE
+            "\n    virtual bool init();"
+            ""
+            _geode_ccfileutils_win32_content
+            "${_geode_ccfileutils_win32_content}"
+        )
+        if (NOT _geode_ccfileutils_win32_content STREQUAL _geode_ccfileutils_win32_original)
+            file(WRITE "${_geode_ccfileutils_win32_h}" "${_geode_ccfileutils_win32_content}")
+            message(STATUS "Applied Clang compatibility patch to CCFileUtilsWin32.h init() redeclaration")
+        endif()
+    endif()
+endif()
+
 add_subdirectory($ENV{GEODE_SDK} ${CMAKE_CURRENT_BINARY_DIR}/geode)
 
 if (MSVC)
