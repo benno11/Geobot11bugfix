@@ -1,4 +1,8 @@
-# 1.1.0
+# Geobot Changelog
+# 1.1.2
+* moved to geode version 5.10.1
+
+# 1.1.1
 * fixed some bugs.
 
 # 1.1.0
@@ -15,7 +19,6 @@
 * fixed a crash on windows
 
 # 1.0.0-alpha.2
-
 * add geode 5x and 2.208
 * starting the process to fork it from xd-bot
 * menu overhauls
