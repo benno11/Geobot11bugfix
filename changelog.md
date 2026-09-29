@@ -1,4 +1,8 @@
 # Geobot Changelog
+# 1.1.3
+* added macro favorites and a favorites filter
+* removed the update popup
+
 # 1.1.2
 * moved to geode version 5.10.1
 

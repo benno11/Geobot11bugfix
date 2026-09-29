@@ -897,30 +897,30 @@ $execute{
     }
   });
 
-  std::string const currentNoticeVersion = geobotVersion;
-  if (!g.mod->hasSavedValue("update_notice_last_seen")) {
-    g.mod->setSavedValue("update_notice_last_seen", currentNoticeVersion);
-  }
-  else {
-    std::string lastSeenVersion = g.mod->getSavedValue<std::string>("update_notice_last_seen");
-    if (lastSeenVersion != currentNoticeVersion) {
-      g.mod->setSavedValue("update_notice_last_seen", currentNoticeVersion);
-      Loader::get()->queueInMainThread([currentNoticeVersion] {
-        geode::createQuickPopup(
-          "Update Available",
-          fmt::format(
-            "<cl>geobot</c> was updated to <cy>{}</c>.\nOpen mod settings to view changelog and options?",
-            currentNoticeVersion
-          ),
-          "Later", "Open",
-          [](auto, bool open) {
-            if (open)
-              geode::openSettingsPopup(Mod::get(), false);
-          }
-        );
-      });
-    }
-  }
+  // std::string const currentNoticeVersion = geobotVersion;
+  // if (!g.mod->hasSavedValue("update_notice_last_seen")) {
+  //   g.mod->setSavedValue("update_notice_last_seen", currentNoticeVersion);
+  // }
+  // else {
+  //   std::string lastSeenVersion = g.mod->getSavedValue<std::string>("update_notice_last_seen");
+  //   if (lastSeenVersion != currentNoticeVersion) {
+  //     g.mod->setSavedValue("update_notice_last_seen", currentNoticeVersion);
+  //     Loader::get()->queueInMainThread([currentNoticeVersion] {
+  //       geode::createQuickPopup(
+  //         "Update Available",
+  //         fmt::format(
+  //           "<cl>geobot</c> was updated to <cy>{}</c>.\nOpen mod settings to view changelog and options?",
+  //           currentNoticeVersion
+  //         ),
+  //         "Later", "Open",
+  //         [](auto, bool open) {
+  //           if (open)
+  //             geode::openSettingsPopup(Mod::get(), false);
+  //         }
+  //       );
+  //     });
+  //   }
+  // }
 
   // Migrate legacy saved keys to current setting IDs.
   if (!g.mod->hasSavedValue("auto_stop_playing") && g.mod->hasSavedValue("macro_auto_stop_playing"))
